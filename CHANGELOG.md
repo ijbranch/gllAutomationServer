@@ -1,0 +1,21 @@
+# Changelog
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
+## [1.0.0] - 2026-10-13
+
+### Added
+- **The package: the server leaves GITLAKLib and becomes one shared copy** (2026-10-13) - `gllAutomationServer.pas`, `gllAutomationServer.dpk`, `gllAutomationServer.dproj`, `Tests\gllAutomationServerTests.dpr`, `Tests\gllAutomationServerTests.dproj`, `Tests\TestGllAutomationServer.pas`, `README.md`, `Help.md`, `Users Guide.md`, `LICENSE`. The unit lived in GITLAKLib, with a renamed, hand-synced copy in gllIdeAutomation (`gllIdeAutomation.Server`) because a unit may exist in only one loaded package. The copies drifted 283 lines apart once, and every change had to be made twice. Now there is one: the DBiWorkflow applications link it through the library path (`37.0\<Platform>\Release`), and gllIdeAutomation `requires` this package. Runtime-only, Win32 + Win64, four modes clean, version 1.0.0.0 with build auto-increment on. MIT, as the copy in gllIdeAutomation already was. **Why a package of its own:** it was also GITLAKLib's only reason to require Indy.
+- **`TAutomationServer.Start` takes `ADisableIdleTimers`** (default True) (2026-10-13) - `gllAutomationServer.pas`. The one behavioural difference between the two copies - an application's idle timers are disabled before each command so it cannot log itself out mid-test; the IDE's belong to its plug-ins - is now chosen by the host. gllIdeAutomation passes False.
+- **`TAutomationServer.ResolveForm` / `ResolveComponent` are public** (2026-10-13) - `gllAutomationServer.pas`. A registered command addresses forms and components exactly as the built-ins do: paths, synthetic names, `Ambiguous`. gllIdeAutomation's `tree_text` moved out of the server onto them.
+- **Protocol 0.11 - components: reachable, path and synthetic names** (2026-10-13) - `gllAutomationServer.pas`. A `name` the form does not own is found anywhere reachable from it: a frame's controls, or a control docked in without being owned (an add-in's frame in the IDE, which `FindComponent` could never see). A dotted path narrows it (`fraAddress.edtTown`). An unnamed component has a synthetic name (`@TButton#2`, numbered per class, the form's own components first), which `tree` reports and every command accepts. A name several components share fails `Ambiguous`, with a path for each in `error.data.candidates`, rather than picking one. `tree` takes `deep`.
+- **Protocol 0.11 - properties: dotted paths, string lists, window text** (2026-10-13) - `gllAutomationServer.pas`. `get` / `set` reach through object properties (`Font.Size`, `Margins.Left`); a `TStrings` reads and writes as its text (`Lines`, `Lines.Text`; `Lines.Count` read-only), where `Lines` used to return the object's address as a number; an unpublished `Text` / `Caption` on a control falls back to its window text, so `TMemo.Text` is readable. A path ending on another object fails `NotScalar` with that object's properties; a `NoProp` list now includes object properties, flagged `nested`. New codes `Ambiguous`, `NotObject`, `NilObject`, `NotScalar`, `ReadOnlyProp`.
+- **Test suite, moved from GITLAKLibUnitTests and extended: 18 tests** (2026-10-13) - `Tests\TestGllAutomationServer.pas`. The 10 registry and envelope tests came with the unit; 8 new ones cover paths and `Ambiguous`, docked and synthetic names, `Font.Size`, string lists and memo text, `NotScalar`, and `keys`. Mutation-proved: dropping Shift from typed text and resolving an ambiguous name to its first match each turned exactly one test red. The moved shadowing test pins the protocol version against a constant; in GITLAKLib it still asserted 0.9 after the 0.10 bump.
+
+### Fixed
+- **`keys` stalled after one stroke in a host without an application window** (2026-10-13) - `gllAutomationServer.pas`. The step markers were posted to `Application.Handle`; in a console test runner there is none, so they went nowhere and the sequence timed out with `strokesSent` 1. They now go to the server's own hidden window (`TKeyStepWindow`), which every host has once a `keys` request arrives. Found by the new test suite.
+
+### Notes
+- History before this package - protocol 0.7 to 0.10 (`click` count, `NoProp` property lists, registered commands, `keys`) - is in GITLAKLib's `CHANGELOG.md` and gllIdeAutomation's.

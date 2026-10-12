@@ -1,0 +1,55 @@
+﻿(*
+  gllAutomationServer - in-app automation server for VCL applications
+
+  Copyright (c) 2016-2026 Ian Branch (GITLAK Software)
+  Licensed under the MIT Licence - see LICENSE at the root of this repository.
+
+  Runtime-only: registers no components and is never installed into the IDE itself. An
+  application links the unit statically (library path); gllIdeAutomation, which IS installed,
+  loads this package through its requires clause.
+*)
+
+package gllAutomationServer;
+
+{$R *.res}
+{$IFDEF IMPLICITBUILDING This IFDEF should not be used by users}
+{$ALIGN 8}
+{$ASSERTIONS ON}
+{$BOOLEVAL OFF}
+{$DEBUGINFO OFF}
+{$EXTENDEDSYNTAX ON}
+{$IMPORTEDDATA ON}
+{$IOCHECKS ON}
+{$LOCALSYMBOLS OFF}
+{$LONGSTRINGS ON}
+{$OPENSTRINGS ON}
+{$OPTIMIZATION ON}
+{$OVERFLOWCHECKS OFF}
+{$RANGECHECKS OFF}
+{$REFERENCEINFO OFF}
+{$SAFEDIVIDE OFF}
+{$STACKFRAMES OFF}
+{$TYPEDADDRESS OFF}
+{$VARSTRINGCHECKS ON}
+{$WRITEABLECONST OFF}
+{$MINENUMSIZE 1}
+{$IMAGEBASE $400000}
+{$DEFINE RELEASE}
+{$ENDIF IMPLICITBUILDING}
+{$DESCRIPTION 'gllAutomationServer - in-app automation server'}
+{$LIBSUFFIX AUTO}
+{$RUNONLY}
+{$IMPLICITBUILD OFF}
+
+requires
+  rtl,
+  vcl,
+  vclimg,
+  dbrtl,
+  IndySystem,
+  IndyCore;
+
+contains
+  gllAutomationServer in 'gllAutomationServer.pas';
+
+end.
