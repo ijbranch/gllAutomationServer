@@ -50,7 +50,7 @@ of whatever plugins you have, since it walks `Screen.Forms` rather than knowing 
 IDE. Treat the count as indicative: it moves with the IDE version, the installed packages and what
 is open at the time.
 
-Commands: `ping`/`info`, `tree`, `get`, `set`, `click`, `action`, `dialogs`, `screenshot`,
+Commands: `ping`/`info`, `tree`, `get`, `set`, `click`, `action`, `keys`, `dialogs`, `screenshot`,
 `dataset`, `dataset_op`, `field_get`, `field_set`, `tree_text`. Forms are addressed by name, `"main"` or
 `"active"`; components by their owned name.
 

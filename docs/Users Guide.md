@@ -97,6 +97,7 @@ the form itself.
 | `set` | `form?`, `name?`, `prop`, `value` | writes a published property and reads it back |
 | `click` | `form?`, `name`, `mode?`, `count?` | fires the component's `OnClick`. `mode=message` posts `BM_CLICK` instead and replies immediately — use it when the handler opens a modal dialog |
 | `action` | `form?`, `name` | executes a `TAction` (or the action on a named control). Covers commands with no clickable control |
+| `keys` | `form?`, `name?`, `text?`, `keys?`, `focus?`, `timeoutMs?` | types text, then key chords (`Ctrl+S`, `Tab Enter`), into a control through the host's own message loop - shortcuts, `KeyPreview` and the `OnKey*` events fire as for a real keyboard. Answers once delivered; stops with `stoppedReason:"modal"` if a keystroke opens a modal window |
 | `dialogs` | `button?` | lists open windows and their visible enabled buttons; with `button`, clicks the first match. Runs off the VCL thread, so it works while a modal loop is blocking |
 | `screenshot` | `area?` | PNG to the Desktop. Default is the monitor the active form is on; `"window"` or `"virtual"` also accepted |
 | `dataset` | `form?`, `name`, `fields?` | state of a `TDataSet` |

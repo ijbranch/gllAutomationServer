@@ -4,6 +4,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`keys` command: keyboard input through the host's own message loop** (2026-10-13) - `src\gllIdeAutomation.Server.pas`, `Help.md`, `README.md`, `Users Guide.md`, `docs\Users Guide.md`. Types `text`, then sends `keys` chords (`Ctrl+S`, `Tab Enter`, `Shift+F10`), to a windowed control, setting the modifier state per stroke and restoring it after; shortcuts, `KeyPreview`, dialog navigation and `OnKeyDown`/`OnKeyPress`/`OnKeyUp` fire as for a real keyboard, with no global input and no need for the host to be in the foreground. Runs on the worker thread and answers once delivered; a stroke that opens a modal window stops the sequence (`stoppedReason:"modal"`). New codes `BadKeys`, `Busy`, `NotTypable`, `Blocked`. Server version 0.10. Ported in the same change as GITLAKLib's `gllAutomationServer`; the bodies differ only by the documented list (no `DisableIdleTimers` call here; the step marker is registered as `gllIdeAutomation.KeyStep`). **Why:** shortcut-only commands and key-handler logic could not be driven at all; the idea came from reviewing Autopilot for Delphi (no code taken - its licence forbids it). Four modes build clean; exercised live on GITLAKLib's identical body, not yet inside the IDE.
+
 ### Removed
 - **Unused `System.StrUtils`** (2026-10-08) - `gllIdeAutomation.IdeCommands.pas`. Left behind when its `IfThen` call became an `if` expression; the removal compiled with identical code bytes.
 

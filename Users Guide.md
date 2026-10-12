@@ -241,6 +241,22 @@ named control:
 This is how you invoke menu and toolbar commands, because that is how they are wired. A disabled
 action returns `ActionDisabled` rather than silently doing nothing.
 
+**`keys`** types text and sends key chords to a windowed control, through the host's own message
+loop — so shortcuts, `KeyPreview`, dialog navigation and the `OnKey*` events run as they would for a
+real keyboard, without the IDE needing to be in the foreground:
+
+```json
+{ "cmd":"keys", "form":"main", "name":"Edit1", "text":"hello", "keys":"Ctrl+S Tab" }
+{ "id":1, "ok":true, "result":{ "target":"Edit1", "strokes":7, "strokesSent":7, "completed":true, "modalOpen":false } }
+```
+
+Omit `name` to type into the form's focused control. `text` goes first, then `keys`; a chord is one
+key with optional `Ctrl+` / `Shift+` / `Alt+`, chords separated by spaces or commas (the full key
+list is in `Help.md`). The control is focused first unless `focus:false`. The reply comes once every
+stroke has been delivered. If a keystroke opens a modal dialog the sequence stops there —
+`completed:false`, `stoppedReason:"modal"` — rather than typing into the window behind it; answer the
+dialog with `dialogs` (§9).
+
 ---
 
 ## 9. Handle a modal dialog
@@ -443,7 +459,8 @@ that might log itself out mid-test.
 
 **Know which thread a command runs on.** `dialogs` and `screenshot` run on the worker thread;
 everything else is marshalled to the main VCL thread. That is precisely why those two still work
-while a modal loop is blocking and the others do not.
+while a modal loop is blocking and the others do not. `keys` is a hybrid: it marshals only its start
+onto the VCL thread, then waits on the worker thread while the keystrokes are delivered.
 
 **The `app_*` tools walk form ownership.** They cannot reach an add-in's frame that is parented
 into an IDE window without being owned by it — no `form` name will find it, because `tree`

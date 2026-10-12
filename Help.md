@@ -113,6 +113,7 @@ Read out of `TServerImpl.ExecuteCommand` and the `AutoCmd*` functions.
 | `action` | `form?`, `name` | `{ executed, fromComponent }` |
 | `dialogs` | `button?` | No `button`: `{ windows:[ { hwnd, class, caption, owned, enabled, buttons } … ] }`. With `button`: `{ clicked, dialog, dismissed }` — `dismissed` says whether the window actually went away, not merely whether a message was sent |
 | `screenshot` | `area?` | `{ path, width, height, area }` |
+| `keys` | `form?`, `name?`, `text?`, `keys?`, `focus?`, `timeoutMs?` | `{ target, strokes, strokesSent, completed, modalOpen, stoppedReason? }` — types `text`, then sends the `keys` chords, to a windowed control (no `name`: the form's focused control) through the host's own message loop, and answers once they have been delivered. `focus` (default true) focuses the control first. `stoppedReason` is `modal` (a keystroke opened a modal window; the rest were not sent), `targetGone` or `timeout`. See [Keyboard input](#keyboard-input-keys) |
 | `dataset` | `form?`, `name`, `fields?` | `{ dataset, active }` — and, **only when the dataset is open**, `recordCount`, `recNo`, `bof`, `eof`, plus `fields` when `fields:true`. A closed dataset is reported, not an error, so read `active` before the rest |
 | `dataset_op` | `form?`, `name`, `op` | `{ dataset, op, state, recNo }` |
 | `field_get` | `form?`, `name`, `field` | `{ dataset, field, type, isNull, value }` |
@@ -188,6 +189,8 @@ measured). Make the project that was run active again and everything comes back.
 | `path` | `ide_menu`, `ide_menu_click` | Steps separated by `\|`, from the menu bar down. Each step is a component name or a caption; a caption is compared without its `&` and without case, and matches by its beginning when nothing matches it whole. A beginning that matches several items → `AmbiguousMenuItem`. Names are the dependable choice in a localised IDE; what the IDE generates (Reopen, Desktops, the user's tools) has no name and can only be named by caption. |
 | `wait` | `debug_run`, `debug_step`, `debug_run_to` | Milliseconds, clamped to `0`..`120000`. |
 | `op` | `dataset_op` | `insert`, `append`, `edit`, `post`, `cancel`, `refresh`, `first`, `last`, `next`, `prior`. Lower-cased and trimmed first; anything else → `BadOp`. |
+| `keys` | `keys` | Chords separated by spaces or commas, each one key with optional `Ctrl+` / `Shift+` / `Alt+`: `A`-`Z`, `0`-`9`, any single character the layout types with at most Shift, `F1`-`F24`, `Enter` `Return` `Tab` `Esc` `Escape` `Space` `Backspace` `Delete` `Del` `Insert` `Ins` `Home` `End` `PgUp` `PgDn` `Up` `Down` `Left` `Right` `Plus` `Minus` `Comma` `Period` `Apps`. Case-insensitive. Anything else, or modifiers with no key → `BadKeys`. |
+| `timeoutMs` | `keys` | Milliseconds to wait for delivery, default `5000`, clamped to `100`..`60000`. |
 | `area` | `screenshot` | `virtual` (the whole virtual screen), `window` (the app's active window rect), anything else → the monitor the active window is on. The result's `area` field reports which of `virtual` / `window` / `monitor` was used. |
 
 ### Which thread a command runs on
@@ -197,13 +200,34 @@ do not.
 
 | Runs on the worker thread | Runs marshalled to the main VCL thread |
 |---|---|
-| `dialogs`, `screenshot`, `debug_run`, `debug_step`, `debug_run_to` | everything else |
+| `dialogs`, `screenshot`, `keys`, `debug_run`, `debug_step`, `debug_run_to` | everything else |
 
 `dialogs` enumerates top-level windows with the Win32 API and clicks with
 `SendMessageTimeout( …, BM_CLICK, …, SMTO_ABORTIFHUNG, 5000, … )`, so it still answers a dialog
 whose modal loop has blocked `Synchronize`. `screenshot` sets
 `SetThreadDpiAwarenessContext( THandle( -4 ) )` — per-monitor-aware V2 — on the capture thread,
 so it captures in physical pixels even though the IDE's UI thread is DPI-unaware.
+
+### Keyboard input (`keys`)
+
+`keys` synchronises only its start onto the VCL thread (resolve, validate, focus), then waits on
+the worker thread while the VCL thread delivers the strokes. Each stroke sets the thread's keyboard
+state (the modifiers VCL reads through `GetKeyState`, with Caps Lock cleared), posts the key-down
+and key-up to the control, and posts a step marker to `Application.Handle`; the marker is reposted
+once so the `WM_CHAR` that `TranslateMessage` queues is delivered before the next stroke. Because
+the messages go through the host's own loop, `Application.OnMessage`, `KeyPreview`, menu and action
+shortcuts, Tab / Enter / Esc dialog navigation and `OnKeyDown` / `OnKeyPress` / `OnKeyUp` all run
+as for a real keyboard, without the host being in the foreground and without synthesising global
+input. The saved keyboard state is restored when the sequence ends.
+
+- Typed text uses the key (plus Shift) the current layout types each character with; a character
+  no key produces without Ctrl/Alt (AltGr, or not on the layout) is posted as a bare `WM_CHAR`, so it
+  fires `OnKeyPress` only. A line break is typed as Enter.
+- A keystroke that opens a modal window is detected at the next step (the target's form is disabled)
+  and the sequence stops with `stoppedReason:"modal"` instead of typing into the control behind it.
+  Answer the modal with `dialogs`.
+- One sequence at a time: a second `keys` while one is being delivered → `Busy`.
+- An Alt chord that opens a menu enters the menu's own modal loop and is best-effort.
 
 ### Properties returned by `tree`
 
@@ -266,6 +290,10 @@ the dispatcher:
 | `ReadOnlyField` | `field_set` on a read-only field |
 | `BadOp` | `dataset_op` `op` is not in the vocabulary above |
 | `CaptureFailed` | the GDI screen capture failed |
+| `BadKeys` | `keys` has nothing to send, more than 4096 strokes, an unknown key name, or a chord with no key or two |
+| `Busy` | `keys` while an earlier `keys` sequence is still being delivered |
+| `NotTypable` | `keys` to a control that is not windowed, or is not visible and enabled |
+| `Blocked` | `keys` to a form disabled by a modal window open over it |
 | `NotVirtualTree` | `tree_text` on a control that is not a `TBaseVirtualTree` descendant (judged by class name) |
 | `NoWindow` | `tree_text` on a tree with no window handle yet |
 | `NotOnScreen` | `tree_text` on a tree whose window is not visible — a hidden pane, or a visible tree inside a hidden parent. Its text only exists while it paints, so show the window first |

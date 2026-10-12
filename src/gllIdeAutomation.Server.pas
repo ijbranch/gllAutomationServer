@@ -56,6 +56,9 @@
 ///   exercise a global error path) · set reports previous + changed · a NoProp
 ///   failure carries the object's property surface, with live values, in
 ///   error.data so the caller self-corrects without another round-trip.
+///   0.10: keys - types text and sends key chords (Ctrl+S, Tab, Enter, ...) to a control through
+///   the app's own message loop, so KeyPreview, shortcuts, dialog navigation and the OnKey*
+///   events run as for a real keyboard; runs on the worker thread and waits for delivery.
 /// </summary>
 unit gllIdeAutomation.Server;
 
@@ -149,6 +152,7 @@ uses
   System.Classes, System.IOUtils, System.DateUtils,
   System.TypInfo, System.Variants, System.Generics.Collections,
   Winapi.Windows, Winapi.Messages, Winapi.MultiMon,
+  System.SyncObjs,
   Data.DB,
   Vcl.Forms, Vcl.Graphics, Vcl.Imaging.pngimage, Vcl.StdCtrls,
   //  FORK: Winapi.ShlObj + Winapi.KnownFolders resolve the REAL Desktop rather than assuming
@@ -164,7 +168,7 @@ const
   /// <summary>Number of consecutive ports probed from <c>AUTOMATION_PORT_BASE</c> before the bind attempt is abandoned.</summary>
   AUTOMATION_PORT_SPAN = 200;    // ports to try before giving up
   /// <summary>Wire-protocol/feature version reported by the <c>ping</c>/<c>info</c> command's <c>server</c> field; bump when commands change.</summary>
-  SERVER_VERSION       = '0.9';  // + registered commands (FORK) · 0.8: click count/stoppedReason · set changed/previous
+  SERVER_VERSION       = '0.10'; // + keys · 0.9: registered commands (FORK) · 0.8: click count/stoppedReason · set changed/previous
   /// <summary>Upper bound on <c>click</c>'s <c>count</c> (a mistyped count must not lock the UI thread for minutes).</summary>
   CLICK_COUNT_MAX      = 1000;
   /// <summary>Upper bound on the property list returned with a <c>NoProp</c> failure; the reply is read by an agent, so it stays bounded.</summary>
@@ -770,8 +774,10 @@ begin
     // 'dialogs' and 'screenshot' are Win32/GDI-only and MUST run on this
     // (background) thread: the main thread may be blocked inside a modal dialog
     // loop that never pumps CheckSynchronize, which would deadlock
-    // TThread.Synchronize (and we still want to see/answer that dialog). Every
-    // other command touches the VCL and is marshalled to the main thread.
+    // TThread.Synchronize (and we still want to see/answer that dialog). 'keys'
+    // runs here too: it synchronises only its start, then WAITS for the main thread
+    // to deliver the keystrokes, which it could not do while occupying that thread.
+    // Every other command touches the VCL and is marshalled to the main thread.
     var sPeekCmd := '';
     oReq.TryGetValue<string>( 'cmd', sPeekCmd );
 
@@ -784,7 +790,7 @@ begin
       //  (a debugger step, say) has to run here, since waiting there would block what it awaits.
       var rReg: TRegisteredCommand;
       var bOnWorker := SameText( sPeekCmd, 'dialogs' ) or SameText( sPeekCmd, 'screenshot' ) or
-        ( FindRegisteredCommand( sPeekCmd, rReg ) and ( rReg.Thread = actWorkerThread ) );
+        SameText( sPeekCmd, 'keys' ) or ( FindRegisteredCommand( sPeekCmd, rReg ) and ( rReg.Thread = actWorkerThread ) );
 
       if bOnWorker then
       begin
@@ -1814,6 +1820,563 @@ begin
 
 end;
 
+{ ── M-F: keys (keyboard input through the app's own message loop) ─────────── }
+
+const
+  /// <summary>Upper bound on the keystrokes one <c>keys</c> request may carry (text characters plus chords).</summary>
+  KEYS_MAX          = 4096;
+  /// <summary>Default wait, in milliseconds, for a <c>keys</c> sequence to be delivered.</summary>
+  KEYS_TIMEOUT_DEFAULT = 5000;
+  /// <summary>Lower clamp on a <c>keys</c> request's <c>timeoutMs</c>.</summary>
+  KEYS_TIMEOUT_MIN  = 100;
+  /// <summary>Upper clamp on a <c>keys</c> request's <c>timeoutMs</c>.</summary>
+  KEYS_TIMEOUT_MAX  = 60000;
+  /// <summary>Step marker <c>WParam</c>: the stroke's key messages are queued; repost once so its generated <c>WM_CHAR</c> is delivered first.</summary>
+  KEYSTEP_POSTED    = 1;
+  /// <summary>Step marker <c>WParam</c>: the previous stroke has been fully delivered; send the next one.</summary>
+  KEYSTEP_SETTLED   = 2;
+  /// <summary>Transition and previous-state bits (31 and 30) of a key-up message's <c>LParam</c>.</summary>
+  KEYUP_LPARAM_BITS = $C0000000;
+
+type
+  /// <summary>One keystroke of a <c>keys</c> sequence.</summary>
+  TKeyStroke = record
+    /// <summary>Virtual-key code; <c>0</c> for a character posted as a bare <c>WM_CHAR</c>.</summary>
+    Vk: Word;
+    /// <summary>The character posted as <c>WM_CHAR</c> when <c>Vk</c> is <c>0</c> (no key on the layout produces it).</summary>
+    Ch: Char;
+    /// <summary>Shift is held for this stroke.</summary>
+    Shift: Boolean;
+    /// <summary>Ctrl is held for this stroke.</summary>
+    Ctrl: Boolean;
+    /// <summary>Alt is held for this stroke; the key is posted as <c>WM_SYSKEYDOWN</c> / <c>WM_SYSKEYUP</c>.</summary>
+    Alt: Boolean;
+  end;
+
+  /// <summary>The worker thread's view of a <c>keys</c> sequence being delivered on the main thread.</summary>
+  IKeySequence = interface
+    ['{6F0B7C1E-3A52-4D8B-9E61-2C4F5A7D8B90}']
+    /// <summary>Waits for the sequence to finish.</summary>
+    /// <param name="ATimeoutMs">The longest wait, in milliseconds.</param>
+    /// <returns><c>True</c> when it finished (completed or stopped) within the wait.</returns>
+    function Wait( ATimeoutMs: Cardinal ): Boolean;
+    /// <summary>Asks the sequence to stop at its next step (it then releases the modifier keys).</summary>
+    procedure Abort;
+    /// <summary>The number of strokes posted so far.</summary>
+    /// <returns>The count; exact once <c>Wait</c> has returned <c>True</c>.</returns>
+    function StrokesSent: Integer;
+    /// <summary>Why the sequence stopped early: <c>modal</c>, <c>targetGone</c>, <c>timeout</c>, or empty when it completed.</summary>
+    /// <returns>The reason; valid once <c>Wait</c> has returned <c>True</c>.</returns>
+    function StopReason: string;
+    /// <summary>True when the target's form was disabled (a modal window open over it) as the sequence finished.</summary>
+    /// <returns>The flag; valid once <c>Wait</c> has returned <c>True</c>.</returns>
+    function ModalOpen: Boolean;
+  end;
+
+  /// <summary>
+  ///   Delivers a list of keystrokes to one control, one stroke at a time, through the app's own
+  ///   message loop - so <c>Application.OnMessage</c>, <c>KeyPreview</c>, menu and action shortcuts,
+  ///   Tab / Enter / Esc dialog navigation and <c>TranslateMessage</c> all run exactly as for a real
+  ///   key press. Lives on the main thread; the worker thread only waits on it.
+  /// </summary>
+  /// <remarks>
+  ///   Each stroke sets the thread's keyboard state (the modifiers VCL reads through
+  ///   <c>GetKeyState</c>), posts its key-down and key-up, then posts a step marker to the
+  ///   application window. The marker is reposted once before the next stroke, so the
+  ///   <c>WM_CHAR</c> that <c>TranslateMessage</c> queues behind the key-down is delivered while the
+  ///   stroke's modifiers are still set. A stroke whose handler opens a modal window is detected at
+  ///   the next step (the target's form is disabled) and the sequence stops there rather than typing
+  ///   into a control behind the modal. The saved keyboard state is restored when it finishes.
+  /// </remarks>
+  TKeySequence = class( TInterfacedObject, IKeySequence )
+  private
+    /// <summary>The strokes to deliver, in order.</summary>
+    FStrokes: TArray<TKeyStroke>;
+    /// <summary>Index of the next stroke to post.</summary>
+    FNext: Integer;
+    /// <summary>The control the key messages are posted to.</summary>
+    FTarget: HWND;
+    /// <summary>The target's top-level window, disabled while a modal window is open over it.</summary>
+    FRoot: HWND;
+    /// <summary>The keyboard state saved at the start, restored when the sequence finishes.</summary>
+    FSaved: TKeyboardState;
+    /// <summary>Signalled when the sequence finishes.</summary>
+    FDone: TEvent;
+    /// <summary>Non-zero once the worker has given up waiting; read with <c>TInterlocked</c>.</summary>
+    FAborted: Integer;
+    /// <summary>See <see cref="IKeySequence.StopReason"/>.</summary>
+    FStopReason: string;
+    /// <summary>See <see cref="IKeySequence.ModalOpen"/>.</summary>
+    FModalOpen: Boolean;
+    /// <summary>Application-window hook that turns the step markers into the next stroke.</summary>
+    /// <param name="AMsg">The message reaching the application window.</param>
+    /// <returns><c>True</c> for a step marker (handled here); <c>False</c> for anything else.</returns>
+    function AppHook( var AMsg: TMessage ): Boolean;
+    /// <summary>Sets the stroke's modifier state and posts its key messages to the target.</summary>
+    /// <param name="AStroke">The stroke.</param>
+    procedure PostStroke( const AStroke: TKeyStroke );
+    /// <summary>Posts the next stroke, or finishes when there is none or the target can no longer take it.</summary>
+    procedure Advance;
+    /// <summary>Restores the keyboard state, removes the hook and signals the waiting worker.</summary>
+    /// <param name="AReason">The stop reason; empty when every stroke was delivered.</param>
+    procedure Finish( const AReason: string );
+  public
+    /// <summary>Creates the sequence; nothing is sent until <c>Start</c>.</summary>
+    /// <param name="AStrokes">The strokes, in order.</param>
+    /// <param name="ATarget">The control's window handle.</param>
+    constructor Create( const AStrokes: TArray<TKeyStroke>; ATarget: HWND );
+    /// <summary>Frees the completion event.</summary>
+    destructor Destroy; override;
+    /// <summary>Saves the keyboard state, hooks the application window and posts the first stroke. Main thread only.</summary>
+    procedure Start;
+    /// <summary>See <see cref="IKeySequence.Wait"/>.</summary>
+    /// <param name="ATimeoutMs">The longest wait, in milliseconds.</param>
+    /// <returns><c>True</c> when the sequence finished within the wait.</returns>
+    function Wait( ATimeoutMs: Cardinal ): Boolean;
+    /// <summary>See <see cref="IKeySequence.Abort"/>.</summary>
+    procedure Abort;
+    /// <summary>See <see cref="IKeySequence.StrokesSent"/>.</summary>
+    /// <returns>The number of strokes posted so far.</returns>
+    function StrokesSent: Integer;
+    /// <summary>See <see cref="IKeySequence.StopReason"/>.</summary>
+    /// <returns>The stop reason.</returns>
+    function StopReason: string;
+    /// <summary>See <see cref="IKeySequence.ModalOpen"/>.</summary>
+    /// <returns>The flag.</returns>
+    function ModalOpen: Boolean;
+  end;
+
+var
+  /// <summary>The registered message id of the <c>keys</c> step marker; registered on first use (main thread).</summary>
+  GKeyStepMsg       : Cardinal;
+  /// <summary>The sequence currently being delivered, kept alive here until it finishes. Main thread only.</summary>
+  GKeysRunning      : IKeySequence;
+
+/// <summary>Sets or clears the pressed bit of a modifier in a keyboard-state array, for the generic key and both sides.</summary>
+/// <param name="AState">The keyboard state to change.</param>
+/// <param name="AGeneric">The side-neutral virtual key (<c>VK_SHIFT</c>, <c>VK_CONTROL</c>, <c>VK_MENU</c>).</param>
+/// <param name="ALeft">The left-hand virtual key, set with the generic one.</param>
+/// <param name="ARight">The right-hand virtual key, always released.</param>
+/// <param name="ADown">True to press the modifier, False to release it.</param>
+procedure SetModifierState( var AState: TKeyboardState; AGeneric, ALeft, ARight: Byte; ADown: Boolean );
+begin
+
+  if ADown then
+  begin
+    AState[ AGeneric ] := AState[ AGeneric ] or $80;
+    AState[ ALeft ] := AState[ ALeft ] or $80;
+  end
+  else
+  begin
+    AState[ AGeneric ] := AState[ AGeneric ] and $7F;
+    AState[ ALeft ] := AState[ ALeft ] and $7F;
+  end;
+  AState[ ARight ]  := AState[ ARight ] and $7F;
+
+end;
+
+/// <summary>Builds the <c>LParam</c> of a posted key-down message: repeat count 1, the scan code, the extended-key bit for the navigation block, and the context bit for Alt.</summary>
+/// <param name="AVk">The virtual key.</param>
+/// <param name="AAlt">True when Alt is held.</param>
+/// <returns>The key-down <c>LParam</c>; OR in <c>KEYUP_LPARAM_BITS</c> for the key-up.</returns>
+function KeyDownLParam( AVk: Word; AAlt: Boolean ): NativeUInt;
+begin
+
+  Result            := 1 or ( NativeUInt( MapVirtualKey( AVk, MAPVK_VK_TO_VSC ) and $FF ) shl 16 );
+
+  case AVk of
+    VK_PRIOR, VK_NEXT, VK_END, VK_HOME, VK_LEFT, VK_UP, VK_RIGHT, VK_DOWN, VK_INSERT, VK_DELETE:
+      Result        := Result or ( NativeUInt( 1 ) shl 24 );
+  end;
+
+  if AAlt then
+    Result          := Result or ( NativeUInt( 1 ) shl 29 );
+
+end;
+
+/// <summary>Maps one key name of a <c>keys</c> chord to its virtual key.</summary>
+/// <param name="AName">A letter or digit, a single printable character, <c>F1</c>..<c>F24</c>, or a named key (Enter, Tab, Esc, Space, Backspace, Delete, Insert, Home, End, PgUp, PgDn, Up, Down, Left, Right, Plus, Minus, Comma, Period).</param>
+/// <param name="AVk">Receives the virtual key.</param>
+/// <param name="AShift">Receives True when the layout needs Shift to produce a single character (e.g. <c>?</c>).</param>
+/// <returns><c>True</c> when the name is recognised.</returns>
+function KeyNameToVk( const AName: string; out AVk: Word; out AShift: Boolean ): Boolean;
+const
+  /// <summary>Named keys and their virtual keys, matched without regard to case.</summary>
+  KEY_NAMES: array[ 0..23 ] of record N: string; V: Word; end = (
+    ( N: 'Enter';     V: VK_RETURN ), ( N: 'Return';   V: VK_RETURN ), ( N: 'Tab';      V: VK_TAB ),
+    ( N: 'Esc';       V: VK_ESCAPE ), ( N: 'Escape';   V: VK_ESCAPE ), ( N: 'Space';    V: VK_SPACE ),
+    ( N: 'Backspace'; V: VK_BACK ),   ( N: 'Delete';   V: VK_DELETE ), ( N: 'Del';      V: VK_DELETE ),
+    ( N: 'Insert';    V: VK_INSERT ), ( N: 'Ins';      V: VK_INSERT ), ( N: 'Home';     V: VK_HOME ),
+    ( N: 'End';       V: VK_END ),    ( N: 'PgUp';     V: VK_PRIOR ),  ( N: 'PgDn';     V: VK_NEXT ),
+    ( N: 'Up';        V: VK_UP ),     ( N: 'Down';     V: VK_DOWN ),   ( N: 'Left';     V: VK_LEFT ),
+    ( N: 'Right';     V: VK_RIGHT ),  ( N: 'Plus';     V: VK_OEM_PLUS ), ( N: 'Minus';  V: VK_OEM_MINUS ),
+    ( N: 'Comma';     V: VK_OEM_COMMA ), ( N: 'Period'; V: VK_OEM_PERIOD ), ( N: 'Apps'; V: VK_APPS ) );
+begin
+
+  AVk               := 0;
+  AShift            := False;
+
+  if Length( AName ) = 1 then
+  begin
+    var ch          := UpCase( AName[ 1 ] );
+    if CharInSet( ch, [ 'A'..'Z', '0'..'9' ] ) then
+    begin
+      AVk           := Ord( ch );
+      Exit( True );
+    end;
+
+    // Any other single character: whatever key the current layout produces it with, provided
+    // that needs no more than Shift (an AltGr character cannot be a chord's key).
+    var iScan       := VkKeyScanEx( AName[ 1 ], GetKeyboardLayout( 0 ) );
+    if ( iScan = -1 ) or ( ( Word( iScan ) shr 8 ) and 6 <> 0 ) then Exit( False );
+    AVk             := Word( iScan ) and $FF;
+    AShift          := ( Word( iScan ) shr 8 ) and 1 <> 0;
+    Exit( True );
+  end;
+
+  var iFn: Integer;
+  if ( Length( AName ) in [ 2, 3 ] ) and ( UpCase( AName[ 1 ] ) = 'F' ) and TryStrToInt( Copy( AName, 2 ), iFn ) and
+    ( iFn >= 1 ) and ( iFn <= 24 ) then
+  begin
+    AVk             := VK_F1 + iFn - 1;
+    Exit( True );
+  end;
+
+  for var i := Low( KEY_NAMES ) to High( KEY_NAMES ) do
+    if SameText( KEY_NAMES[ i ].N, AName ) then
+    begin
+      AVk           := KEY_NAMES[ i ].V;
+      Exit( True );
+    end;
+
+  Result            := False;
+
+end;
+
+/// <summary>Parses a <c>keys</c> string - chords separated by spaces or commas, each a key name with optional <c>Ctrl+</c> / <c>Shift+</c> / <c>Alt+</c> prefixes - into strokes.</summary>
+/// <param name="AKeys">The chord list, e.g. <c>Ctrl+S</c>, <c>Tab Tab Enter</c>, <c>Shift+F10</c>.</param>
+/// <returns>One stroke per chord.</returns>
+/// <remarks>Raises <c>EAutoError</c> - Code <c>BadKeys</c> - for an unknown key name or a chord with no key, or with two.</remarks>
+function ParseKeyChords( const AKeys: string ): TArray<TKeyStroke>;
+begin
+
+  Result            := nil;
+
+  for var sChord in AKeys.Split( [ ' ', ',', #9, #13, #10 ], TStringSplitOptions.ExcludeEmpty ) do
+  begin
+    var r           := Default( TKeyStroke );
+    var bHaveKey    := False;
+
+    for var sPart in sChord.Split( [ '+' ] ) do
+    begin
+      if SameText( sPart, 'Ctrl' ) or SameText( sPart, 'Control' ) then
+        r.Ctrl      := True
+      else if SameText( sPart, 'Shift' ) then
+        r.Shift     := True
+      else if SameText( sPart, 'Alt' ) then
+        r.Alt       := True
+      else
+      begin
+        var wVk: Word;
+        var bShift: Boolean;
+        if bHaveKey or not KeyNameToVk( sPart, wVk, bShift ) then
+          raise EAutoError.CreateCode( 'BadKeys', Format( '"%s" is not a key chord (one key, optionally with Ctrl+ / Shift+ / Alt+; ' +
+            'named keys: Enter Tab Esc Space Backspace Delete Insert Home End PgUp PgDn Up Down Left Right Plus Minus Comma ' +
+            'Period Apps F1..F24)', [ sChord ] ) );
+        r.Vk        := wVk;
+        r.Shift     := r.Shift or bShift;
+        bHaveKey    := True;
+      end;
+    end;
+
+    if not bHaveKey then
+      raise EAutoError.CreateCode( 'BadKeys', Format( '"%s" has modifiers but no key', [ sChord ] ) );
+
+    Result          := Result + [ r ];
+  end;
+
+end;
+
+/// <summary>Turns literal text into strokes: each character as the key (plus Shift) the current layout types it with, or a bare <c>WM_CHAR</c> when no key on the layout produces it without Ctrl/Alt.</summary>
+/// <param name="AText">The text; CR LF and a lone LF are both typed as Enter.</param>
+/// <returns>One stroke per character.</returns>
+function TextToStrokes( const AText: string ): TArray<TKeyStroke>;
+begin
+
+  Result            := nil;
+
+  var hLayout       := GetKeyboardLayout( 0 );
+  for var ch in AText.Replace( #13#10, #13 ).Replace( #10, #13 ) do
+  begin
+    var r           := Default( TKeyStroke );
+    var iScan       := VkKeyScanEx( ch, hLayout );
+    if ( iScan <> -1 ) and ( ( Word( iScan ) shr 8 ) and 6 = 0 ) then
+    begin
+      r.Vk          := Word( iScan ) and $FF;
+      r.Shift       := ( Word( iScan ) shr 8 ) and 1 <> 0;
+    end
+    else
+      r.Ch          := ch;
+    Result          := Result + [ r ];
+  end;
+
+end;
+
+constructor TKeySequence.Create( const AStrokes: TArray<TKeyStroke>; ATarget: HWND );
+begin
+
+  inherited Create;
+  FStrokes          := AStrokes;
+  FTarget           := ATarget;
+  FRoot             := GetAncestor( ATarget, GA_ROOT );
+  FDone             := TEvent.Create( nil, True, False, '' );
+
+end;
+
+destructor TKeySequence.Destroy;
+begin
+
+  FDone.Free;
+  inherited;
+
+end;
+
+procedure TKeySequence.Start;
+begin
+
+  if GKeyStepMsg = 0 then
+    GKeyStepMsg     := RegisterWindowMessage( 'gllIdeAutomation.KeyStep' );
+
+  GetKeyboardState( FSaved );
+  Application.HookMainWindow( AppHook );
+  Advance;
+
+end;
+
+function TKeySequence.AppHook( var AMsg: TMessage ): Boolean;
+begin
+
+  Result            := ( GKeyStepMsg <> 0 ) and ( AMsg.Msg = GKeyStepMsg );
+  if not Result then Exit;
+
+  // Finish drops GKeysRunning's reference; if the worker has already given up, that was the last
+  // one. Hold our own until this call is over.
+  _AddRef;
+  try
+    if AMsg.WParam = KEYSTEP_POSTED then
+      PostMessage( Application.Handle, GKeyStepMsg, KEYSTEP_SETTLED, 0 )
+    else
+      Advance;
+  finally
+    _Release;
+  end;
+
+end;
+
+procedure TKeySequence.PostStroke( const AStroke: TKeyStroke );
+begin
+
+  var kb            := FSaved;
+  SetModifierState( kb, VK_SHIFT, VK_LSHIFT, VK_RSHIFT, AStroke.Shift );
+  SetModifierState( kb, VK_CONTROL, VK_LCONTROL, VK_RCONTROL, AStroke.Ctrl );
+  SetModifierState( kb, VK_MENU, VK_LMENU, VK_RMENU, AStroke.Alt );
+  kb[ VK_CAPITAL ]  := 0; // a Caps Lock left on would invert the case TranslateMessage types
+  SetKeyboardState( kb );
+
+  if AStroke.Vk = 0 then
+  begin
+    PostMessage( FTarget, WM_CHAR, WPARAM( Ord( AStroke.Ch ) ), 1 );
+    Exit;
+  end;
+
+  // Alt chords and F10 are system keys: a real keyboard sends them as WM_SYSKEY*.
+  var bSys          := AStroke.Alt or ( AStroke.Vk = VK_F10 );
+  var nLParam       := KeyDownLParam( AStroke.Vk, AStroke.Alt );
+  PostMessage( FTarget, if bSys then WM_SYSKEYDOWN else WM_KEYDOWN, WPARAM( AStroke.Vk ), LPARAM( nLParam ) );
+  PostMessage( FTarget, if bSys then WM_SYSKEYUP else WM_KEYUP, WPARAM( AStroke.Vk ), LPARAM( nLParam or KEYUP_LPARAM_BITS ) );
+
+end;
+
+procedure TKeySequence.Advance;
+begin
+
+  if TInterlocked.CompareExchange( FAborted, 0, 0 ) <> 0 then
+    Finish( 'timeout' )
+  else if FNext > High( FStrokes ) then
+    Finish( '' )
+  else if not IsWindow( FTarget ) then
+    Finish( 'targetGone' )
+  else if not IsWindowEnabled( FRoot ) then
+    Finish( 'modal' ) // the last stroke opened a modal: do not type into the control behind it
+  else
+  begin
+    PostStroke( FStrokes[ FNext ] );
+    Inc( FNext );
+    PostMessage( Application.Handle, GKeyStepMsg, KEYSTEP_POSTED, 0 );
+  end;
+
+end;
+
+procedure TKeySequence.Finish( const AReason: string );
+begin
+
+  SetKeyboardState( FSaved );
+  Application.UnhookMainWindow( AppHook );
+
+  FStopReason       := AReason;
+  FModalOpen        := IsWindow( FRoot ) and not IsWindowEnabled( FRoot );
+  FDone.SetEvent;
+
+  GKeysRunning      := nil; // StartKeySequence admits one sequence at a time, so this is us
+
+end;
+
+function TKeySequence.Wait( ATimeoutMs: Cardinal ): Boolean;
+begin
+
+  Result            := FDone.WaitFor( ATimeoutMs ) = wrSignaled;
+
+end;
+
+procedure TKeySequence.Abort;
+begin
+
+  TInterlocked.Exchange( FAborted, 1 );
+
+end;
+
+function TKeySequence.StrokesSent: Integer;
+begin
+
+  Result            := FNext;
+
+end;
+
+function TKeySequence.StopReason: string;
+begin
+
+  Result            := FStopReason;
+
+end;
+
+function TKeySequence.ModalOpen: Boolean;
+begin
+
+  Result            := FModalOpen;
+
+end;
+
+/// <summary>Main-thread half of <c>keys</c>: resolves and validates the target, focuses it, and starts delivering the strokes.</summary>
+/// <param name="AReq">The request object (see <c>AutoCmdKeys</c>).</param>
+/// <param name="ATarget">Receives the name (or class) of the control the keys go to.</param>
+/// <param name="ACount">Receives the number of strokes.</param>
+/// <returns>The running sequence.</returns>
+/// <remarks>
+///   Raises <c>EAutoError</c> - Code <c>BadKeys</c> (nothing to send, too many strokes, or a bad
+///   chord); <c>Busy</c> (another sequence is still being delivered); <c>NotTypable</c> (not a
+///   windowed control, or not visible+enabled); <c>Blocked</c> (a modal window is open over the form).
+/// </remarks>
+function StartKeySequence( AReq: TJSONObject; out ATarget: string; out ACount: Integer ): IKeySequence;
+begin
+
+  var oForm         := AutoResolveForm( AReq );
+  var oComp         := AutoResolveComp( AReq, oForm );
+
+  var aStrokes      := TextToStrokes( AReq.GetValue<string>( 'text', '' ) ) + ParseKeyChords( AReq.GetValue<string>( 'keys', '' ) );
+  if Length( aStrokes ) = 0 then
+    raise EAutoError.CreateCode( 'BadKeys', 'nothing to send: give text and/or keys' );
+  if Length( aStrokes ) > KEYS_MAX then
+    raise EAutoError.CreateCode( 'BadKeys', Format( '%d keystrokes is more than the %d one request may carry', [ Length( aStrokes ), KEYS_MAX ] ) );
+
+  if GKeysRunning <> nil then
+    raise EAutoError.CreateCode( 'Busy', 'an earlier keys sequence is still being delivered' );
+
+  // No name: the keys go where a user's would - the form's focused control.
+  var oCtl: TWinControl;
+  if ( oComp = oForm ) and Assigned( oForm.ActiveControl ) then
+    oCtl            := oForm.ActiveControl
+  else if oComp is TWinControl then
+    oCtl            := TWinControl( oComp )
+  else
+    raise EAutoError.CreateCode( 'NotTypable', Format( '%s (%s) is not a windowed control, so it cannot take keyboard input',
+      [ oComp.Name, oComp.ClassName ] ) );
+
+  if not IsWindowEnabled( oForm.Handle ) then
+    raise EAutoError.CreateCode( 'Blocked', oForm.Name + ' is disabled - a modal window is open over it; answer it with dialogs first' );
+
+  // Faithful to a real keyboard: a user cannot type into a hidden or disabled control.
+  if not oCtl.CanFocus then
+    raise EAutoError.CreateCode( 'NotTypable', oCtl.Name + ' is not visible+enabled' );
+
+  // Focus it as a user's click would - firing the previous control's OnExit and this one's
+  // OnEnter - so Tab / Enter navigation starts from it.
+  if AReq.GetValue<Boolean>( 'focus', True ) and ( oCtl <> oForm ) and ( oForm.ActiveControl <> oCtl ) then
+    oCtl.SetFocus;
+
+  var oSeq          := TKeySequence.Create( aStrokes, oCtl.Handle );
+  Result            := oSeq;
+  GKeysRunning      := Result;
+  ATarget           := if oCtl.Name <> '' then oCtl.Name else oCtl.ClassName;
+  ACount            := Length( aStrokes );
+  oSeq.Start;
+
+end;
+
+/// <summary>
+///   <c>keys</c> command (runs on the worker thread): types <c>text</c>, then sends the <c>keys</c>
+///   chords, to a control through the app's own message loop, and waits until they have been
+///   delivered. The app does not need to be in the foreground and no global input is synthesised.
+/// </summary>
+/// <param name="AReq">
+///   The request object (<c>form?</c>, <c>name?</c> - omit for the form's focused control,
+///   <c>text?</c>, <c>keys?</c>, <c>focus?</c> - default true, <c>timeoutMs?</c> - default
+///   <c>KEYS_TIMEOUT_DEFAULT</c>, clamped <c>KEYS_TIMEOUT_MIN</c>..<c>KEYS_TIMEOUT_MAX</c>).
+/// </param>
+/// <returns>
+///   <c>{ target, strokes, strokesSent, completed, modalOpen, stoppedReason? }</c>. <c>stoppedReason</c>
+///   is <c>modal</c> (a stroke opened a modal window; the rest were not sent), <c>targetGone</c> or
+///   <c>timeout</c>.
+/// </returns>
+/// <remarks>
+///   Typed text fires <c>OnKeyDown</c>, <c>OnKeyPress</c> and <c>OnKeyUp</c> like real typing; a
+///   character no key on the current layout produces without Ctrl/Alt is posted as a bare
+///   <c>WM_CHAR</c> (<c>OnKeyPress</c> only). An Alt chord that opens a menu enters the menu's own
+///   modal loop and is best-effort. Error codes: see <c>StartKeySequence</c>.
+/// </remarks>
+function AutoCmdKeys( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var iTimeout      := AReq.GetValue<Integer>( 'timeoutMs', KEYS_TIMEOUT_DEFAULT );
+  if iTimeout < KEYS_TIMEOUT_MIN then iTimeout := KEYS_TIMEOUT_MIN;
+  if iTimeout > KEYS_TIMEOUT_MAX then iTimeout := KEYS_TIMEOUT_MAX;
+
+  var oSeq: IKeySequence := nil;
+  var sTarget       := '';
+  var iCount        := 0;
+  TThread.Synchronize( nil,
+    procedure
+    begin
+      oSeq          := StartKeySequence( AReq, sTarget, iCount );
+    end );
+
+  var bFinished     := oSeq.Wait( Cardinal( iTimeout ) );
+  if not bFinished then
+    oSeq.Abort; // the next step releases the modifiers and stops
+
+  var sReason       := if bFinished then oSeq.StopReason else 'timeout';
+
+  Result            := TJSONObject.Create;
+  var o             := TJSONObject( Result );
+  o.AddPair( 'target', sTarget );
+  o.AddPair( 'strokes', TJSONNumber.Create( iCount ) );
+  o.AddPair( 'strokesSent', TJSONNumber.Create( oSeq.StrokesSent ) );
+  o.AddPair( 'completed', TJSONBool.Create( sReason = '' ) );
+  o.AddPair( 'modalOpen', TJSONBool.Create( bFinished and oSeq.ModalOpen ) );
+  if sReason <> '' then
+    o.AddPair( 'stoppedReason', sReason );
+
+end;
+
 { ── M-E: screenshot (Win32 GDI, off the VCL thread) ──────────────────────── }
 
 /// <summary>user32 import: sets the calling thread's DPI-awareness context (for native-resolution capture). Not declared in this RTL's <c>Winapi.Windows</c>.</summary>
@@ -2109,6 +2672,12 @@ begin
     begin
       //  FORK: see AutoCmdTreeText.
       var oOut := AutoCmdTreeText( AReq );
+      Result.AddPair( 'ok', TJSONBool.Create( True ) );
+      Result.AddPair( 'result', oOut );
+    end
+    else if SameText( sCmd, 'keys' ) then
+    begin
+      var oOut := AutoCmdKeys( AReq );
       Result.AddPair( 'ok', TJSONBool.Create( True ) );
       Result.AddPair( 'result', oOut );
     end
