@@ -1,8 +1,30 @@
-﻿(*
-  gllAutomationServer - in-app automation server for VCL applications
+﻿(* GITLAK Software
+  ***************************************************************************
 
-  Copyright (c) 2016-2026 Ian Branch (GITLAK Software)
-  Licensed under the MIT Licence - see LICENSE at the root of this repository.
+    (C) 2026 Ian Branch (GITLAK Software). All rights reserved.
+
+    This code and all associated intellectual property, including proprietary
+    algorithms and confidential information, are the exclusive property of Ian
+    Branch (GITLAK Software).
+
+    Any reproduction, distribution, or use, in whole or in part, by any other
+    party is strictly prohibited without the express written permission of the
+    Author.
+
+    Complete development history is retained & maintained in my Private GitHub
+    Repository.
+
+    THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED.
+    IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DAMAGES ARISING IN CONNECTION
+    WITH THE USE OF THIS SOFTWARE.
+
+  ***************************************************************************
+
+  Author(s) :
+  Ian Branch - GITLAK Software.
+
+  ***************************************************************************
 *)
 
 /// <summary>
@@ -24,7 +46,7 @@ interface
 uses
   DUnitX.TestFramework,
   System.JSON,
-  Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls;
+  Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.Imaging.pngimage;
 
 type
   /// <summary>End-to-end tests of the automation server's commands.</summary>
@@ -41,6 +63,15 @@ type
     FMemo: TMemo;
     /// <summary>The plain edit the keys tests type into.</summary>
     FEdit: TEdit;
+    /// <summary>A non-windowed control for the screenshot tests.</summary>
+    FLabel: TLabel;
+    /// <summary>
+    ///   Takes a screenshot that must succeed, loads the PNG, deletes the file, and returns the reply.
+    /// </summary>
+    /// <param name="AArgs">The request members as a JSON object text.</param>
+    /// <param name="APng">Receives the loaded image; the caller frees it.</param>
+    /// <returns>The reply object; the caller frees it.</returns>
+    function Shoot( const AArgs: string; out APng: TPngImage ): TJSONObject;
     /// <summary>
     ///   Sends one request and returns the parsed reply, pumping <c>CheckSynchronize</c> and the message
     ///   queue while it waits so that a main-thread command - and a keys sequence - can run.
@@ -138,13 +169,30 @@ type
     [Test] procedure Keys_TypeTextIntoAnEdit;
     /// <summary>A chord that names no real key is refused before anything is sent, so a typo cannot half-type a sequence.</summary>
     [Test] procedure Keys_BadChord_IsRefusedBeforeSending;
+    /// <summary>
+    ///   A named windowed control is RENDERED, not copied off the screen: the test form sits at -3000,
+    ///   where a screen capture shows only whatever is there, yet the PNG is the memo's own size and its
+    ///   own magenta background.
+    /// </summary>
+    [Test] procedure Screenshot_OfAControl_RendersItself_EvenOffScreen;
+    /// <summary>A non-windowed control (a TLabel) has no window to render, so it is cropped out of its parent's rendering - at its own size, in its own yellow.</summary>
+    [Test] procedure Screenshot_OfANonWindowedControl_IsCroppedFromItsParent;
+    /// <summary>maxWidth scales the image down proportionally, and the reply gives the source size so the caller knows it was scaled.</summary>
+    [Test] procedure Screenshot_MaxWidth_ScalesProportionally;
+    /// <summary>
+    ///   A whole-form render includes its child windows: the memo's fuchsia is found where the memo sits
+    ///   in the form's window. The VCL's PaintTo, the fallback, drew only the first child of a form, so
+    ///   this is what tells the DWM path (frame and every child) from a degraded one.
+    /// </summary>
+    [Test] procedure Screenshot_OfAForm_IncludesItsChildren;
   end;
 
 implementation
 
 uses
-  System.SysUtils, System.Classes, System.IOUtils, System.Diagnostics, System.Generics.Collections,
+  System.SysUtils, System.Classes, System.Types, System.IOUtils, System.Diagnostics, System.Generics.Collections,
   Winapi.Windows,
+  Vcl.Graphics,
   IdTCPClient, IdGlobal,
   gllAutomationServer;
 
@@ -156,7 +204,7 @@ const
   /// <summary>Name the test process registers under.</summary>
   APP_NAME        = 'gllAutomationServerTests';
   /// <summary>The wire-protocol version ping must report.</summary>
-  PROTOCOL_VERSION = '0.11';
+  PROTOCOL_VERSION = '0.12';
   /// <summary>Name of the test form, which the requests address.</summary>
   FORM_NAME       = 'AutoTestForm';
 
@@ -211,6 +259,17 @@ begin
   FMemo.Name := 'Memo1';
   FMemo.Parent := FForm;
   FMemo.Lines.Text := 'line one' + sLineBreak + 'line two';
+  FMemo.SetBounds( 200, 10, 150, 90 );
+  FMemo.Color := clFuchsia; // a colour nothing behind an off-screen form would happen to show
+
+  FLabel := TLabel.Create( FForm );
+  FLabel.Name := 'lblInfo';
+  FLabel.Parent := FForm;
+  FLabel.AutoSize := False;
+  FLabel.Transparent := False;
+  FLabel.Color := clYellow;
+  FLabel.SetBounds( 200, 120, 80, 30 );
+  FLabel.Caption := '';
 
   FEdit := TEdit.Create( FForm );
   FEdit.Name := 'edtType';
@@ -282,7 +341,7 @@ begin
   for var sName in [ CMD_MAIN, CMD_WORKER, CMD_FAIL, CMD_SHADOW ] do
     TAutomationServer.UnregisterCommand( sName );
   FreeAndNil( FDocked );
-  FreeAndNil( FForm );
+  FreeAndNil( FForm ); // owns FLabel and FMemo
 
 end;
 
@@ -682,6 +741,130 @@ begin
   FEdit.Text := 'untouched';
   Assert.AreEqual( 'BadKeys', SendFail( 'keys', Format( '{"form":"%s","name":"edtType","text":"zz","keys":"Ctrl+Nope"}', [ FORM_NAME ] ) ), False );
   Assert.AreEqual( 'untouched', FEdit.Text, False, 'a refused sequence still typed its text' );
+
+end;
+
+/// <summary>
+///   Ignores the calling test when this process runs in Session 0, the services' session. It has no
+///   interactive desktop, so DWM has nothing to compose and PrintWindow renders blank white - measured
+///   2026-10-13: 22/22 run from a desktop session, the three render tests white under GITLAKMCP's
+///   test_run, which launches from its service. The ignore says so, rather than failing for the
+///   environment or passing without having looked.
+/// </summary>
+procedure RequireInteractiveSession;
+begin
+
+  var iSession: DWORD;
+  if ProcessIdToSessionId( GetCurrentProcessId, iSession ) and ( iSession = 0 ) then
+    Assert.Ignore( 'Session 0 (launched from a service) has no interactive desktop to render; run the suite from a desktop session' );
+
+end;
+
+function TTestGllAutomationServer.Shoot( const AArgs: string; out APng: TPngImage ): TJSONObject;
+begin
+
+  RequireInteractiveSession;
+  Result := Send( 'screenshot', AArgs );
+  Assert.IsTrue( Result.GetValue<Boolean>( 'ok' ), Result.ToJSON );
+  var sPath := Result.GetValue<string>( 'result.path' );
+  APng := TPngImage.Create;
+  try
+    APng.LoadFromFile( sPath );
+  finally
+    System.SysUtils.DeleteFile( sPath ); // a test must not leave PNGs on the Desktop
+  end;
+
+end;
+
+/// <summary>Whether a pixel is within a small tolerance of a colour (PNG round trips are exact, but halftone or theming may nudge an edge).</summary>
+/// <param name="APixel">The pixel read.</param>
+/// <param name="AColor">The expected colour.</param>
+/// <returns>True when every channel is within 8.</returns>
+function NearColor( APixel, AColor: TColor ): Boolean;
+begin
+
+  var p := ColorToRGB( APixel );
+  var c := ColorToRGB( AColor );
+  Result := ( Abs( GetRValue( p ) - GetRValue( c ) ) <= 8 ) and ( Abs( GetGValue( p ) - GetGValue( c ) ) <= 8 ) and
+    ( Abs( GetBValue( p ) - GetBValue( c ) ) <= 8 );
+
+end;
+
+procedure TTestGllAutomationServer.Screenshot_OfAControl_RendersItself_EvenOffScreen;
+begin
+
+  var oPng: TPngImage;
+  var oReply := Shoot( Format( '{"form":"%s","name":"Memo1"}', [ FORM_NAME ] ), oPng );
+  try
+    Assert.AreEqual( 'control', oReply.GetValue<string>( 'result.area' ), False );
+    Assert.AreEqual( FMemo.Width, oPng.Width, 'width' );
+    Assert.AreEqual( FMemo.Height, oPng.Height, 'height' );
+    // Bottom-right, inside the border, below any text: the memo's own background.
+    var cPixel := oPng.Pixels[ oPng.Width - 8, oPng.Height - 8 ];
+    Assert.IsTrue( NearColor( cPixel, clFuchsia ), Format( 'expected the memo''s fuchsia, got $%.6x: %s', [ ColorToRGB( cPixel ), oReply.ToJSON ] ) );
+  finally
+    oPng.Free;
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Screenshot_OfANonWindowedControl_IsCroppedFromItsParent;
+begin
+
+  var oPng: TPngImage;
+  var oReply := Shoot( Format( '{"form":"%s","name":"lblInfo"}', [ FORM_NAME ] ), oPng );
+  try
+    Assert.AreEqual( FLabel.Width, oPng.Width, 'width' );
+    Assert.AreEqual( FLabel.Height, oPng.Height, 'height' );
+    for var pt in [ Point( 1, 1 ), Point( oPng.Width - 2, oPng.Height - 2 ) ] do
+    begin
+      var cPixel := oPng.Pixels[ pt.X, pt.Y ];
+      Assert.IsTrue( NearColor( cPixel, clYellow ), Format( 'expected the label''s yellow at (%d,%d), got $%.6x', [ pt.X, pt.Y, ColorToRGB( cPixel ) ] ) );
+    end;
+  finally
+    oPng.Free;
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Screenshot_MaxWidth_ScalesProportionally;
+begin
+
+  var oPng: TPngImage;
+  var oReply := Shoot( Format( '{"form":"%s","name":"Memo1","maxWidth":75}', [ FORM_NAME ] ), oPng );
+  try
+    Assert.AreEqual( 75, oPng.Width, 'width' );
+    Assert.AreEqual( Round( FMemo.Height * 75 / FMemo.Width ), oPng.Height, 'height' );
+    Assert.AreEqual( FMemo.Width, oReply.GetValue<Integer>( 'result.sourceWidth' ), 'sourceWidth' );
+    Assert.AreEqual( 75, oReply.GetValue<Integer>( 'result.width' ), 'reply width' );
+  finally
+    oPng.Free;
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Screenshot_OfAForm_IncludesItsChildren;
+begin
+
+  var oPng: TPngImage;
+  var oReply := Shoot( Format( '{"form":"%s"}', [ FORM_NAME ] ), oPng );
+  try
+    Assert.AreEqual( 'form', oReply.GetValue<string>( 'result.area' ), False );
+    var rcForm, rcMemo: TRect;
+    GetWindowRect( FForm.Handle, rcForm );
+    GetWindowRect( FMemo.Handle, rcMemo );
+    Assert.AreEqual( rcForm.Width, oPng.Width, 'width: the form window, frame included' );
+    // Inside the memo's bottom-right corner, in the form window's coordinates.
+    var cPixel := oPng.Pixels[ rcMemo.Right - rcForm.Left - 8, rcMemo.Bottom - rcForm.Top - 8 ];
+    Assert.IsTrue( NearColor( cPixel, clFuchsia ), Format( 'expected the memo''s fuchsia inside the form, got $%.6x: %s',
+      [ ColorToRGB( cPixel ), oReply.ToJSON ] ) );
+  finally
+    oPng.Free;
+    oReply.Free;
+  end;
 
 end;
 

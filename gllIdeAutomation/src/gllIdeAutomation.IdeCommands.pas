@@ -1,8 +1,34 @@
-﻿(*
-  gllIdeAutomation - in-IDE automation server
+﻿(* GITLAK Software
+  ***************************************************************************
 
-  Copyright (c) 2016-2026 Ian Branch (GITLAK Software)
-  Licensed under the MIT Licence - see LICENSE at the root of this repository.
+    (C) 2026 Ian Branch (GITLAK Software). All rights reserved.
+
+    This code and all associated intellectual property, including proprietary
+    algorithms and confidential information, are the exclusive property of Ian
+    Branch (GITLAK Software).
+
+    Any reproduction, distribution, or use, in whole or in part, by any other
+    party is strictly prohibited without the express written permission of the
+    Author.
+
+    Complete development history is retained & maintained in my Private GitHub
+    Repository.
+
+    THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED.
+    IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DAMAGES ARISING IN CONNECTION
+    WITH THE USE OF THIS SOFTWARE.
+
+  ***************************************************************************
+
+  Author(s) :
+  Ian Branch - GITLAK Software.
+
+  ***************************************************************************
+*)
+
+(*
+  gllIdeAutomation - in-IDE automation server
 
   The commands here are the ones only the IDE needs - the ToolsAPI set, and tree_text for the
   debugger panes - kept out of the shared gllAutomationServer package so that stays VCL-only and
@@ -20,8 +46,8 @@
 /// </summary>
 unit gllIdeAutomation.IdeCommands;
 
-{$IF CompilerVersion < 33.0}
-  {$MESSAGE FATAL 'gllIdeAutomation requires Delphi 10.3 Rio or later.'}
+{$IF CompilerVersion < 37.0}
+  {$MESSAGE FATAL 'gllIdeAutomation requires Delphi 13 Florence or later.'}
 {$IFEND}
 
 interface

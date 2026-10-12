@@ -6,9 +6,9 @@ from outside it over a loopback socket. It exists because some questions can onl
 a running IDE — what the evaluator calls a type, whether a visualizer is offered, how a value
 renders — and none of that is visible to the compiler.
 
-The source targets **Delphi 10.3 Rio and later** (the `{$LIBSUFFIX}` ladder in
-`gllIdeAutomation.dpk` and a `{$MESSAGE FATAL}` below `CompilerVersion 33.0` say so), but this
-repository is built and used on **Delphi 13 / RAD Studio 37.0 only**, VCL, **Win32 + Win64**.
+It targets **Delphi 13 / RAD Studio 37.0** only, VCL, **Win32 + Win64**: the units stop
+with a `{$MESSAGE FATAL}` below `CompilerVersion 37.0` (until 2026-10-13 they carried a 10.3 Rio floor
+and a `{$LIBSUFFIX}` ladder, from when the package was public). Proprietary, in-house.
 
 This file is the **lookup** document for what this package adds: the gate, the 22 commands it
 registers, their error codes, and the IDE-specific failures with their exact text. The automation
@@ -34,7 +34,7 @@ the `gllAutomationServer` runtime package.
 ### What it uses from `gllAutomationServer`
 
 The server is its own package, at the root of this repository, `D:\gllAutomationServer` (unit
-`gllAutomationServer`, package version 1.0.0.0, wire protocol version `0.11`), which this package
+`gllAutomationServer`, package version 1.0.0.0, wire protocol version `0.12`), which this package
 `requires`. Its full API is in `D:\gllAutomationServer\Help.md`; the parts used here:
 
 | Member | Used for |
@@ -81,7 +81,7 @@ alive before trusting it. The server sweeps dead PIDs' files on start.
 The built-in commands are `ping` / `info`, `tree`, `get`, `set`, `click`, `action`, `keys`,
 `dialogs`, `screenshot`, `dataset`, `dataset_op`, `field_get` and `field_set`. Inside the IDE,
 `ping` reports `version` as `bds.exe`'s, `package` as the `gllAutomationServer` BPL's (`1.0.0.0`)
-and `server` as the protocol version (`0.11`). Since 0.11 a component `name` may be a dotted path
+and `server` as the protocol version (`0.12`). Since 0.11 a component `name` may be a dotted path
 (`fraA.edtTown`) or a synthetic name for an unnamed component (`@TButton#2`), reaches frame-owned
 and docked controls, and a name that matches several is `Ambiguous`; `prop` may be a dotted path
 (`Font.Size`) and `TStrings` read and write as text.
@@ -299,9 +299,8 @@ for Win64 Release and Win64 Debug, and the BPL reports the number from before th
   `.\dcu\$(Platform)\$(Config)`. Do not flatten it — one folder shared by two architectures gives
   every consumer `F2048 Bad unit format`.
 - `DCC_CBuilderOutput` is `None`. C++Builder is never in scope.
-- The BPL name carries a version suffix chosen in the `.dpk` by `CompilerVersion`: `AUTO` on 12
-  Athens and later, an explicit `280` / `270` / `260` below that. `{$LIBSUFFIX AUTO}` is itself a
-  12-and-later feature, so the ladder is what keeps the `.dpk` compiling on an older IDE.
+- The BPL name carries the compiler's version suffix through `{$LIBSUFFIX AUTO}` (`370` on 13
+  Florence), matched by `<DllSuffix>$(Auto)</DllSuffix>` in the `.dproj`.
 
 ---
 

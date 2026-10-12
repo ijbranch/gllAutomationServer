@@ -10,17 +10,17 @@ visualizer is offered on a type, what the evaluator calls that type, how a value
 Variables: none of that is visible to the compiler, and reading it off screenshots is slow and
 error-prone. This makes the IDE inspectable instead.
 
-Delphi **10.3 Rio and later**, Win32 or Win64. MIT licensed.
+Delphi **13 Florence** (RAD Studio 37.0), Win32 or Win64. Proprietary - GITLAK Software, in-house
+(it was MIT-licensed and public until 2026-10-13; see `LICENSE` at the repository root).
 Current version: **1.2.0** (tagged `v1.2.0`, 2026-09-29) — see [CHANGELOG.md](CHANGELOG.md). It carries
 wire protocol `0.9`; the previous release, 1.0.1, carried `0.7`. There is no 1.1.0 release: that number was
 only ever an untagged working version. (1.0.0 was tagged earlier the same day as 1.0.1 and
 superseded within hours; never take 1.0.0.)
 
-Fair warning on that range: it is what the source targets — inline variables set the 10.3 floor,
-and the `$LIBSUFFIX` selection covers 10.3 through 13 — but **13 Florence is the only version it
-has actually been built on**, because it is the only one I have. If you try it on an older IDE I
-would be glad to hear how it went, particularly whether the package suffix comes out right.
-On anything older than 13, open the `.dpk` rather than the `.dproj` — see [Installing](#installing).
+Delphi 13 is the floor, as for everything in the estate: the units stop with a
+`{$MESSAGE FATAL}` below `CompilerVersion 37.0`. Until 2026-10-13 the source carried a `$LIBSUFFIX`
+ladder and guards for 10.3 Rio and later, from when the package was public; nothing older than 13
+was ever built.
 
 ## Documentation
 
@@ -177,8 +177,8 @@ since 2026-10-13. Things worth knowing before changing it:
 - A change to the server itself — a built-in command, addressing, the transport — belongs in
   **gllAutomationServer**, not here. This package holds only what the IDE alone needs: the gate,
   the ToolsAPI commands, and `tree_text`.
-- Keep it compiling on **10.3 Rio**. The inline variables set that floor already; please don't
-  raise it without a good reason. Only 13 Florence is built here.
+- **Delphi 13 Florence only**, Win32 + Win64, like the rest of the estate. Use D13 language features
+  freely.
 - **Rebuild with the package unticked or the IDE closed.** An IDE with it installed holds both the
   `.bpl` and the `.dcp` open, so a build cannot replace them and stops with two
   `F2039 Could not create output file` errors — from the command line as much as from inside the
@@ -222,9 +222,8 @@ tools/                          launcher, clicker, pane reader
 ## Keeping it working
 
 - **Rebuild and re-register after a RAD Studio upgrade.** The BPL is version-suffixed and the
-  registration is per-version. The suffix is picked by `CompilerVersion` in the `.dpk` — `AUTO` on
-  12 Athens and later, an explicit number below that, since `{$LIBSUFFIX AUTO}` is itself a
-  12-and-later feature and would otherwise be the thing that broke the build on an older IDE.
+  registration is per-version. The `.dpk` uses `{$LIBSUFFIX AUTO}`, so the suffix follows the
+  compiler (`370` on 13 Florence).
 - **Check which build is loaded before debugging a misbehaving one.** The BPL carries version
   information, so its Details tab answers the question:
 

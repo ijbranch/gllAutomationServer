@@ -1,8 +1,34 @@
-﻿(*
-  gllAutomationServer - in-app automation server for VCL applications
+﻿(* GITLAK Software
+  ***************************************************************************
 
-  Copyright (c) 2016-2026 Ian Branch (GITLAK Software)
-  Licensed under the MIT Licence - see LICENSE at the root of this repository.
+    (C) 2026 Ian Branch (GITLAK Software). All rights reserved.
+
+    This code and all associated intellectual property, including proprietary
+    algorithms and confidential information, are the exclusive property of Ian
+    Branch (GITLAK Software).
+
+    Any reproduction, distribution, or use, in whole or in part, by any other
+    party is strictly prohibited without the express written permission of the
+    Author.
+
+    Complete development history is retained & maintained in my Private GitHub
+    Repository.
+
+    THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED.
+    IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DAMAGES ARISING IN CONNECTION
+    WITH THE USE OF THIS SOFTWARE.
+
+  ***************************************************************************
+
+  Author(s) :
+  Ian Branch - GITLAK Software.
+
+  ***************************************************************************
+*)
+
+(*
+  gllAutomationServer - in-app automation server for VCL applications
 
   ONE COPY. Until 2026-10-13 this unit lived in GITLAKLib, with a renamed, hand-synced copy in
   gllIdeAutomation (gllIdeAutomation.Server) because a unit may exist in only one loaded package.
@@ -58,6 +84,9 @@
 ///   a control's window text for an unpublished Text / Caption (TMemo.Text). The unit moves to its
 ///   own package; Start takes ADisableIdleTimers, and ResolveForm / ResolveComponent are public so a
 ///   registered command addresses forms and components exactly as the built-ins do.
+///   0.12: screenshot takes name (and form): the target's top-level window is rendered through DWM
+///   from the worker thread and the target cropped from it, so a covered or off-screen window comes
+///   out as itself; maxWidth scales any screenshot down.
 /// </summary>
 unit gllAutomationServer;
 
@@ -169,7 +198,7 @@ type
 implementation
 
 uses
-  System.IOUtils, System.DateUtils,
+  System.Types, System.IOUtils, System.DateUtils, System.Math,
   System.TypInfo, System.Variants, System.Generics.Collections,
   Winapi.Windows, Winapi.Messages, Winapi.MultiMon,
   System.SyncObjs,
@@ -186,7 +215,7 @@ const
   /// <summary>Number of consecutive ports probed from <c>AUTOMATION_PORT_BASE</c> before the bind attempt is abandoned.</summary>
   AUTOMATION_PORT_SPAN = 200; // ports to try before giving up
   /// <summary>Wire-protocol/feature version reported by the <c>ping</c>/<c>info</c> command's <c>server</c> field; bump when commands change.</summary>
-  SERVER_VERSION    = '0.11'; // + reachable/synthetic/path names, dotted props · 0.10: keys · 0.9: registered commands · 0.8: click count/stoppedReason · set changed/previous
+  SERVER_VERSION    = '0.12'; // + screenshot name/form render, maxWidth · 0.11: reachable/synthetic/path names, dotted props · 0.10: keys · 0.9: registered commands · 0.8: click count/stoppedReason · set changed/previous
   /// <summary>Upper bound on <c>click</c>'s <c>count</c> (a mistyped count must not lock the UI thread for minutes).</summary>
   CLICK_COUNT_MAX   = 1000;
   /// <summary>Upper bound on the property list returned with a <c>NoProp</c> failure; the reply is read by an agent, so it stays bounded.</summary>
@@ -2783,14 +2812,63 @@ end;
 function SetThreadDpiAwarenessContext( ADpiContext: THandle ): THandle; stdcall; external 'user32.dll' delayed;
 {$WARN SYMBOL_PLATFORM DEFAULT}
 
+/// <summary>Saves a bitmap as a PNG, first scaling it down proportionally when it is wider than <paramref name="AMaxWidth"/>.</summary>
+/// <param name="ABmp">The bitmap; left unchanged.</param>
+/// <param name="APath">Destination PNG path (parent directories are created).</param>
+/// <param name="AMaxWidth">The widest the saved image may be; <c>0</c> or less for no limit.</param>
+/// <param name="AWidth">Receives the saved image's width.</param>
+/// <param name="AHeight">Receives the saved image's height.</param>
+/// <remarks>Scaling uses <c>HALFTONE</c> stretching, which averages pixels rather than dropping them, so text shrinks legibly further than a plain stretch allows. Pure GDI, safe off the main thread.</remarks>
+procedure SavePng( ABmp: TBitmap; const APath: string; AMaxWidth: Integer; out AWidth, AHeight: Integer );
+begin
+
+  AWidth            := ABmp.Width;
+  AHeight           := ABmp.Height;
+
+  var oScaled: TBitmap := nil;
+  try
+    var oSave       := ABmp;
+    if ( AMaxWidth > 0 ) and ( ABmp.Width > AMaxWidth ) then
+    begin
+      AWidth        := AMaxWidth;
+      AHeight       := Max( 1, Round( ABmp.Height * AMaxWidth / ABmp.Width ) );
+      oScaled       := TBitmap.Create;
+      oScaled.PixelFormat := pf24bit;
+      oScaled.SetSize( AWidth, AHeight );
+      SetStretchBltMode( oScaled.Canvas.Handle, HALFTONE );
+      SetBrushOrgEx( oScaled.Canvas.Handle, 0, 0, nil );
+      StretchBlt( oScaled.Canvas.Handle, 0, 0, AWidth, AHeight, ABmp.Canvas.Handle, 0, 0, ABmp.Width, ABmp.Height, SRCCOPY );
+      oSave         := oScaled;
+    end;
+
+    ForceDirectories( ExtractFilePath( APath ) );
+
+    var oPng        := TPngImage.Create;
+    try
+      oPng.Assign( oSave );
+      oPng.SaveToFile( APath );
+    finally
+      oPng.Free;
+    end;
+  finally
+    oScaled.Free;
+  end;
+
+end;
+
 /// <summary>BitBlts a virtual-desktop rectangle (a monitor, a window, or the whole desktop) into a PNG file. Pure GDI — safe off the main thread; <c>GetDC(0)</c> spans the entire virtual desktop, so any monitor's coordinates capture correctly.</summary>
 /// <param name="ARect">The screen rectangle in virtual-desktop coordinates.</param>
 /// <param name="APath">Destination PNG path (parent directories are created).</param>
+/// <param name="AMaxWidth">The widest the saved image may be; <c>0</c> for no limit.</param>
+/// <param name="AWidth">Receives the saved image's width.</param>
+/// <param name="AHeight">Receives the saved image's height.</param>
 /// <returns><c>True</c> on success; <c>False</c> for an empty rectangle.</returns>
-function CaptureRect( const ARect: TRect; const APath: string ): Boolean;
+function CaptureRect( const ARect: TRect; const APath: string; AMaxWidth: Integer; out AWidth, AHeight: Integer ): Boolean;
 begin
 
   Result            := False;
+  AWidth            := 0;
+  AHeight           := 0;
 
   var iW            := ARect.Right - ARect.Left;
   var iH            := ARect.Bottom - ARect.Top;
@@ -2803,17 +2881,7 @@ begin
       oBmp.PixelFormat := pf24bit;
       oBmp.SetSize( iW, iH );
       BitBlt( oBmp.Canvas.Handle, 0, 0, iW, iH, hdcScreen, ARect.Left, ARect.Top, SRCCOPY );
-
-      ForceDirectories( ExtractFilePath( APath ) );
-
-      var oPng      := TPngImage.Create;
-      try
-        oPng.Assign( oBmp );
-        oPng.SaveToFile( APath );
-      finally
-        oPng.Free;
-      end;
-
+      SavePng( oBmp, APath, AMaxWidth, AWidth, AHeight );
       Result        := True;
     finally
       oBmp.Free;
@@ -2823,6 +2891,17 @@ begin
   end;
 
 end;
+
+/// <summary>user32 import: asks a window to render itself into a device context. Imported here because this RTL declares it only in <c>Winapi.WinSpool</c>, a printing unit this one has no other use for.</summary>
+/// <param name="AWnd">The window.</param>
+/// <param name="ADC">The device context to render into.</param>
+/// <param name="AFlags"><c>PW_RENDERFULLCONTENT_FLAG</c>, or 0 for the classic rendering.</param>
+/// <returns>True on success.</returns>
+function PrintWindowApi( AWnd: HWND; ADC: HDC; AFlags: UINT ): BOOL; stdcall; external user32 name 'PrintWindow';
+
+const
+  /// <summary><c>PrintWindow</c> flag (Windows 8.1+): render through DWM, so themed and DirectX content comes out as it looks.</summary>
+  PW_RENDERFULLCONTENT_FLAG = 2;
 
 /// <summary>Returns the user's real Desktop directory.</summary>
 /// <returns>The Desktop path from the known-folder API, falling back to <c>%USERPROFILE%\Desktop</c> only if that call fails.</returns>
@@ -2883,23 +2962,219 @@ begin
 
 end;
 
+type
+  /// <summary>What the main thread works out about a render target, so the worker thread can render it without touching the VCL.</summary>
+  TRenderPlan = record
+    /// <summary>The target's top-level window, which <c>PrintWindow</c> renders whole.</summary>
+    Root: HWND;
+    /// <summary>The root window's size, in the host's own (logical, for a DPI-unaware host) pixels.</summary>
+    RootSize: TSize;
+    /// <summary>The target's rectangle inside the root window's rendering.</summary>
+    Crop: TRect;
+    /// <summary>The target's name (or its class, when unnamed), for the reply.</summary>
+    Target: string;
+    /// <summary><c>form</c> or <c>control</c>.</summary>
+    Area: string;
+  end;
+
+/// <summary>
+///   Main-thread half of render mode: resolves the target and works out where it sits inside its
+///   top-level window. Coordinates come from the host's main thread, so they are in the host's own
+///   DPI space - the same space <c>PrintWindow</c> renders the window in.
+/// </summary>
+/// <param name="AReq">The request object (<c>form?</c>, <c>name?</c>).</param>
+/// <returns>The plan.</returns>
+/// <remarks>Raises <c>EAutoError</c> - the addressing codes; <c>NotVisual</c> (not a control); <c>NotShowing</c> (hidden, or on a hidden parent - nothing to render).</remarks>
+function PlanRender( AReq: TJSONObject ): TRenderPlan;
+begin
+
+  var oForm         := AutoResolveForm( AReq );
+  var oComp         := AutoResolveComp( AReq, oForm );
+
+  if oComp is not TControl then
+    raise EAutoError.CreateCode( 'NotVisual', Format( '%s (%s) is not a control, so it has nothing to render', [ oComp.Name, oComp.ClassName ] ) );
+
+  var oCtl          := TControl( oComp );
+  var bShowing      := if oCtl is TWinControl then TWinControl( oCtl ).Showing
+    else oCtl.Visible and ( oCtl.Parent <> nil ) and oCtl.Parent.Showing;
+  if not bShowing then
+    raise EAutoError.CreateCode( 'NotShowing', oCtl.Name + ' is not showing, so it has nothing to render' );
+
+  // The target's outer rectangle on screen: a windowed control's own window rectangle (a form's
+  // frame included), or a graphic control's bounds mapped through its parent's client area.
+  var rcTarget: TRect;
+  var hAnchor: HWND;
+  if oCtl is TWinControl then
+  begin
+    hAnchor         := TWinControl( oCtl ).Handle;
+    GetWindowRect( hAnchor, rcTarget );
+  end
+  else
+  begin
+    hAnchor         := oCtl.Parent.Handle;
+    var ptOrigin    := oCtl.Parent.ClientToScreen( oCtl.BoundsRect.TopLeft );
+    rcTarget        := Rect( ptOrigin.X, ptOrigin.Y, ptOrigin.X + oCtl.Width, ptOrigin.Y + oCtl.Height );
+  end;
+
+  Result.Root       := GetAncestor( hAnchor, GA_ROOT );
+  var rcRoot: TRect;
+  GetWindowRect( Result.Root, rcRoot );
+  Result.RootSize   := TSize.Create( rcRoot.Width, rcRoot.Height );
+  Result.Crop       := rcTarget;
+  Result.Crop.Offset( -rcRoot.Left, -rcRoot.Top );
+  // A control scrolled partly out of its window: keep the part the window can render.
+  Result.Crop.Intersect( Rect( 0, 0, rcRoot.Width, rcRoot.Height ) );
+
+  Result.Area       := if oComp = oForm then 'form' else 'control';
+  Result.Target     := if oComp.Name <> '' then oComp.Name else AReq.GetValue<string>( 'name', oComp.ClassName );
+
+end;
+
+/// <summary>
+///   <c>screenshot</c> command, render mode: with a <c>"name"</c> (or a <c>"form"</c> and no
+///   <c>"area"</c>), renders the target's top-level window as it paints itself and crops the target
+///   out - legible at full detail, and correct even when the window is covered or off-screen, where
+///   a screen capture shows whatever is in front.
+/// </summary>
+/// <param name="AReq">The request object (<c>form?</c>, <c>name?</c>, <c>maxWidth?</c>).</param>
+/// <param name="AAppName">The app name, used in the PNG filename.</param>
+/// <returns><c>{ path, width, height, area, target, renderer, sourceWidth?, sourceHeight? }</c>; <c>area</c> is <c>control</c> or <c>form</c>; <c>renderer</c> is <c>dwm</c> or <c>paintTo</c>.</returns>
+/// <remarks>
+///   Only the planning runs on the main thread; <c>PrintWindow</c> runs here, on the worker thread.
+///   That is not a detail: measured 2026-10-13, DWM's full-content <c>PrintWindow</c> called FROM the
+///   window's own thread returns FALSE (the window must repaint itself for DWM, and its thread is
+///   busy running the caller), and the classic <c>PrintWindow</c> from there paints nothing. From
+///   another thread it renders the whole window, children included. It refuses child windows, so
+///   the whole top-level window is rendered and the target cropped from it. Should it still refuse,
+///   the VCL's <c>PaintTo</c> is the fallback (<c>renderer:"paintTo"</c>) - it renders one control
+///   well but not reliably a whole form's children. Because planning synchronises, this mode waits
+///   while a native dialog blocks the main thread. Raises <c>EAutoError</c> - <c>PlanRender</c>'s
+///   codes, and <c>CaptureFailed</c>.
+/// </remarks>
+function AutoCmdRender( AReq: TJSONObject; const AAppName: string ): TJSONValue;
+begin
+
+  var iMaxWidth     := AReq.GetValue<Integer>( 'maxWidth', 0 );
+  var sPath         := Format( '%s\%s-%u.png', [ DesktopFolder, AAppName, GetTickCount64 ] );
+
+  var rPlan: TRenderPlan;
+  TThread.Synchronize( nil,
+    procedure
+    begin
+      rPlan         := PlanRender( AReq );
+    end );
+
+  if rPlan.Crop.IsEmpty then
+    raise EAutoError.CreateCode( 'NotShowing', rPlan.Target + ' lies outside its window, so there is nothing to render' );
+
+  var sRenderer     := 'dwm';
+  var oShot         := TBitmap.Create;
+  try
+    oShot.PixelFormat := pf24bit;
+    oShot.SetSize( rPlan.Crop.Width, rPlan.Crop.Height );
+
+    var oRoot       := TBitmap.Create;
+    try
+      // 32-bit: DWM's full-content PrintWindow reports success into a 24-bit DIB and draws nothing.
+      oRoot.PixelFormat := pf32bit;
+      oRoot.SetSize( Max( 1, rPlan.RootSize.cx ), Max( 1, rPlan.RootSize.cy ) );
+
+      // Locked: off the main thread the VCL may otherwise reclaim a bitmap canvas's DC from under
+      // us (its idle-time FreeMemoryContexts), and a DC taken away mid-call fails the render.
+      oRoot.Canvas.Lock;
+      oShot.Canvas.Lock;
+      var bRendered: Boolean;
+      try
+        bRendered   := PrintWindowApi( rPlan.Root, oRoot.Canvas.Handle, PW_RENDERFULLCONTENT_FLAG );
+        if bRendered then
+          BitBlt( oShot.Canvas.Handle, 0, 0, rPlan.Crop.Width, rPlan.Crop.Height, oRoot.Canvas.Handle, rPlan.Crop.Left,
+            rPlan.Crop.Top, SRCCOPY );
+      finally
+        oShot.Canvas.Unlock;
+        oRoot.Canvas.Unlock;
+      end;
+
+      if not bRendered then
+      begin
+        // The fallback renders the target itself, on the main thread.
+        sRenderer   := 'paintTo';
+        TThread.Synchronize( nil,
+          procedure
+          begin
+            var oForm := AutoResolveForm( AReq );
+            var oComp := AutoResolveComp( AReq, oForm );
+            if oComp is TWinControl then
+              TWinControl( oComp ).PaintTo( oShot.Canvas.Handle, 0, 0 )
+            else
+            begin
+              var oCtl := TControl( oComp );
+              var oParentShot := TBitmap.Create;
+              try
+                oParentShot.PixelFormat := pf24bit;
+                oParentShot.SetSize( Max( 1, oCtl.Parent.ClientWidth ), Max( 1, oCtl.Parent.ClientHeight ) );
+                oCtl.Parent.PaintTo( oParentShot.Canvas.Handle, 0, 0 );
+                BitBlt( oShot.Canvas.Handle, 0, 0, oCtl.Width, oCtl.Height, oParentShot.Canvas.Handle, oCtl.Left, oCtl.Top, SRCCOPY );
+              finally
+                oParentShot.Free;
+              end;
+            end;
+          end );
+      end;
+    finally
+      oRoot.Free;
+    end;
+
+    var iW, iH: Integer;
+    SavePng( oShot, sPath, iMaxWidth, iW, iH );
+
+    Result          := TJSONObject.Create;
+    var o           := TJSONObject( Result );
+    o.AddPair( 'path', sPath );
+    o.AddPair( 'width', TJSONNumber.Create( iW ) );
+    o.AddPair( 'height', TJSONNumber.Create( iH ) );
+    o.AddPair( 'area', rPlan.Area );
+    o.AddPair( 'target', rPlan.Target );
+    o.AddPair( 'renderer', sRenderer );
+    if ( iW <> oShot.Width ) or ( iH <> oShot.Height ) then
+    begin
+      o.AddPair( 'sourceWidth', TJSONNumber.Create( oShot.Width ) );
+      o.AddPair( 'sourceHeight', TJSONNumber.Create( oShot.Height ) );
+    end;
+  finally
+    oShot.Free;
+  end;
+
+end;
+
 /// <summary>
 ///   <c>screenshot</c> command (Win32/GDI, runs OFF the VCL thread). By default
 ///   captures the whole <b>monitor</b> the app's active window sits on (a modal
 ///   dialog if one is open, else the main form); <c>"area":"window"</c> captures
 ///   just that window's rectangle and <c>"area":"virtual"</c> the entire desktop.
 ///   The capture thread is set per-monitor DPI-aware so it grabs native resolution.
-///   Writes a PNG to the user's Desktop.
+///   With a <c>"name"</c>, or a <c>"form"</c> and no <c>"area"</c>, it renders that
+///   control or form instead (see <c>AutoCmdRender</c>). <c>"maxWidth"</c> scales any
+///   of them down proportionally. Writes a PNG to the user's Desktop.
 /// </summary>
-/// <param name="AReq">The request object (<c>area?</c>).</param>
+/// <param name="AReq">The request object (<c>area?</c>, <c>form?</c>, <c>name?</c>, <c>maxWidth?</c>).</param>
 /// <param name="AAppName">The app name, used in the PNG filename.</param>
-/// <returns><c>{ path, width, height, area }</c>.</returns>
-/// <remarks>Raises <c>EAutoError</c> —Code <c>CaptureFailed</c> on a GDI failure.</remarks>
+/// <returns><c>{ path, width, height, area }</c>, plus <c>target</c> in render mode and <c>sourceWidth</c> / <c>sourceHeight</c> when scaled.</returns>
+/// <remarks>
+///   The screen-capture modes copy screen PIXELS: a window covered by another, or off-screen,
+///   captures as whatever is in front of it. Render mode does not have that limit.
+///   Raises <c>EAutoError</c> —Code <c>CaptureFailed</c> on a GDI failure.
+/// </remarks>
 function AutoCmdScreenshot( AReq: TJSONObject; const AAppName: string ): TJSONValue;
 var
   rc                : TRect;
   mi                : TMonitorInfo;
 begin
+
+  if ( AReq.GetValue<string>( 'name', '' ) <> '' ) or
+    ( ( AReq.GetValue<string>( 'form', '' ) <> '' ) and ( AReq.GetValue<string>( 'area', '' ) = '' ) ) then
+    Exit( AutoCmdRender( AReq, AAppName ) );
+
+  var iMaxWidth     := AReq.GetValue<Integer>( 'maxWidth', 0 );
 
   // Make THIS (capture) thread per-monitor DPI-aware so GetMonitorInfo / GetDC /
   // BitBlt work in PHYSICAL pixels and capture the monitor at its native
@@ -2946,14 +3221,20 @@ begin
     //  the tick is the only thing keeping the filenames apart.
     var sPath       := Format( '%s\%s-%u.png', [ DesktopFolder, AAppName, GetTickCount64 ] );
 
-    if not CaptureRect( rc, sPath ) then
+    var iW, iH: Integer;
+    if not CaptureRect( rc, sPath, iMaxWidth, iW, iH ) then
       raise EAutoError.CreateCode( 'CaptureFailed', 'screen capture failed' );
 
     Result          := TJSONObject.Create;
     TJSONObject( Result ).AddPair( 'path', sPath );
-    TJSONObject( Result ).AddPair( 'width', TJSONNumber.Create( rc.Right - rc.Left ) );
-    TJSONObject( Result ).AddPair( 'height', TJSONNumber.Create( rc.Bottom - rc.Top ) );
+    TJSONObject( Result ).AddPair( 'width', TJSONNumber.Create( iW ) );
+    TJSONObject( Result ).AddPair( 'height', TJSONNumber.Create( iH ) );
     TJSONObject( Result ).AddPair( 'area', sMode );
+    if iW <> rc.Right - rc.Left then
+    begin
+      TJSONObject( Result ).AddPair( 'sourceWidth', TJSONNumber.Create( rc.Right - rc.Left ) );
+      TJSONObject( Result ).AddPair( 'sourceHeight', TJSONNumber.Create( rc.Bottom - rc.Top ) );
+    end;
   finally
     if hPrevDpi <> 0 then SetThreadDpiAwarenessContext( hPrevDpi );
   end;

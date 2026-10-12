@@ -53,7 +53,7 @@ Read what is on screen, then act on it:
 | Type, or press a shortcut | `keys` — `text:"ACME"`, `keys:"Ctrl+S Tab"` |
 | Answer a modal dialog | `dialogs` — `button:"OK"` |
 | Read or edit data | `dataset`, `field_get`, `field_set`, `dataset_op` |
-| See it | `screenshot` |
+| See it | `screenshot` — `name` or `form` renders just that, correct even when covered; `maxWidth` scales |
 
 ### Naming a component
 

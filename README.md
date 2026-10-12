@@ -73,4 +73,4 @@ subtree merge, and its old tags are `gllIdeAutomation-v1.0.0`, `-v1.0.1` and `-v
 
 ## Licence
 
-MIT — see [LICENSE](LICENSE).
+Proprietary — GITLAK Software, in-house; see [LICENSE](LICENSE). (MIT and public until 2026-10-13.)

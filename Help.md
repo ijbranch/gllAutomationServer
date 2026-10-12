@@ -118,13 +118,24 @@ Omitted = the form itself. Otherwise, in this order:
 | `field_set` | `form?`, `name`, `field`, `value` | `{ dataset, field, state, isNull, value }` — writes the field (JSON `null` clears it), putting a **browsing** dataset into edit mode first; an existing insert/edit is left alone and nothing is posted. Writes the data directly, so control-level `OnExit` / validation does **not** run — use `keys` for that path |
 | `dataset_op` | `form?`, `name`, `op` | `{ dataset, op, state, recNo }` — `op` = `insert` `append` `edit` `post` `cancel` `refresh` `first` `last` `next` `prior` (else `BadOp`). Needed because `TwwNavButton` does its dataset work in the navigator, not in `OnClick` |
 | `dataset` | `form?`, `name`, `fields?` | `{ dataset, active, recordCount, recNo, bof, eof }`; `fields:true` adds the current record's values |
-| `screenshot` | `area?` | `{ path, width, height, area }` — PNG saved to the real **Desktop** (Known Folder API). Default = the monitor the active form/dialog is on; `area:"window"` = that window; `area:"virtual"` = whole desktop |
+| `screenshot` | `form?`, `name?`, `area?`, `maxWidth?` | PNG saved to the real **Desktop** (Known Folder API) → `{ path, width, height, area, target?, renderer?, sourceWidth?, sourceHeight? }`. **Render mode** (0.12) — with a `name`, or a `form` and no `area`: the target's top-level window is rendered as it paints itself and the target cropped from it, at the host's own logical size, so it is legible at full detail and **correct even when the window is covered or off-screen**; `area` is `control` or `form`, `renderer` is `dwm` (or `paintTo`, a weaker fallback that may miss a form's child windows). **Capture mode** — otherwise: screen pixels of the monitor the active form/dialog is on, `area:"window"` that window, `area:"virtual"` the whole desktop — whatever is in front of the app is what you get. `maxWidth` scales either down proportionally (`sourceWidth`/`sourceHeight` then give the original). See *Screenshots* below |
 
-**Error codes:** `Unauthorised`, `UnknownCmd`, `NoForm`, `NoComp`, `Ambiguous`, `NoProp`, `NotObject`, `NilObject`, `NotScalar`, `ReadOnlyProp`, `NoOnClick`, `NoHandler`, `NotButton`, `NotClickable`, `BadMode`, `BadCount`, `NoAction`, `ActionDisabled`, `NotDataSet`, `DataSetClosed`, `NoField`, `ReadOnlyField`, `BadOp`, `NoButton`, `CaptureFailed`, `BadKeys`, `Busy`, `NotTypable`, `Blocked`, `BadRequest`, `RequestTooLong`, `Internal`. A failure may carry `error.data` (`NoProp`, `NotScalar`, `Ambiguous`).
+**Error codes:** `Unauthorised`, `UnknownCmd`, `NotVisual`, `NotShowing`, `NoForm`, `NoComp`, `Ambiguous`, `NoProp`, `NotObject`, `NilObject`, `NotScalar`, `ReadOnlyProp`, `NoOnClick`, `NoHandler`, `NotButton`, `NotClickable`, `BadMode`, `BadCount`, `NoAction`, `ActionDisabled`, `NotDataSet`, `DataSetClosed`, `NoField`, `ReadOnlyField`, `BadOp`, `NoButton`, `CaptureFailed`, `BadKeys`, `Busy`, `NotTypable`, `Blocked`, `BadRequest`, `RequestTooLong`, `Internal`. A failure may carry `error.data` (`NoProp`, `NotScalar`, `Ambiguous`).
 
 ### ⚠ `click mode=direct` is an exception firewall — the global error path never runs
 
 `direct` mode invokes `OnClick` **inside** the command, so an exception the handler raises is caught here and reported as `stoppedReason: "exception:<ClassName>"` + `stoppedMessage`. It never reaches `Application.HandleException`, so **EurekaLog does not fire, no `.elp` is written, and no error dialog appears** — a result that reads exactly like a broken crash handler. **To exercise a global error path, use `mode=message`:** the posted `BM_CLICK` runs the handler from the app's own message loop, so the exception takes the route it would from a real user click.
+
+### Screenshots: render, don't capture
+
+Capture mode copies screen pixels, so a window behind another — your editor, a tooltip — or off-screen comes out as whatever is in front of it, with no error. Render mode asks the window to paint itself instead:
+
+- The main thread only **plans**: it resolves the target and works out its top-level window and the target's rectangle inside it, in the host's own DPI space.
+- The **worker thread** then calls `PrintWindow( root, dc, PW_RENDERFULLCONTENT )` — DWM's rendering of the whole window, frame and every child — into a **32-bit** bitmap, and crops the target out. Measured 2026-10-13, each of these silently fails: calling `PrintWindow` from the window's own thread (DWM returns FALSE: the window has to repaint and its thread is busy running the caller); the classic `PrintWindow` on a VCL child control (TRUE, blank image); a 24-bit bitmap (TRUE, blank image); and a VCL bitmap canvas used off the main thread without `Canvas.Lock` (the VCL reclaims its DC).
+- DWM refuses a child window, so a control is always cropped from its top-level window's rendering — windowed or not, a `TLabel` included.
+- **Session 0** (a process launched from a service) has no interactive desktop: render mode returns a blank image there. Real applications run in a user session; the test suite's render tests ignore themselves in Session 0.
+- Render mode synchronises its planning onto the main thread, so it waits while a native dialog blocks that thread; capture mode does not, and is the one to use then.
+- Errors: `NotVisual` (not a control), `NotShowing` (hidden, on a hidden parent, or outside its window).
 
 ### Keyboard input (`keys`)
 
@@ -224,7 +235,7 @@ TAutomationServer.RegisterCommand( 'myapp_state',
 
 ## Tests
 
-`Tests\gllAutomationServerTests.dproj` — 18 end-to-end DUnitX tests over loopback: the command registry, the envelope contract, addressing (paths, `Ambiguous`, docked and synthetic names), property paths, and `keys`. The test project links this package's DCUs from `..\37.0\<Platform>\<Config>`, so **build the package first**. Mutation-proved on 2026-10-13: dropping the Shift state from typed text and resolving an ambiguous name to its first match each turned exactly one test red.
+`Tests\gllAutomationServerTests.dproj` — 22 end-to-end DUnitX tests over loopback: the command registry, the envelope contract, addressing (paths, `Ambiguous`, docked and synthetic names), property paths, `keys`, and screenshot render mode (an off-screen control's own colour, a cropped `TLabel`, a whole form with its children, `maxWidth`). The four screenshot tests ignore themselves in Session 0, so through GITLAKMCP's `test_run` (a service) expect 18 passed / 4 ignored; run the exe from a desktop session for 22. The test project links this package's DCUs from `..\37.0\<Platform>\<Config>`, so **build the package first**. Mutation-proved on 2026-10-13: dropping the Shift state from typed text and resolving an ambiguous name to its first match each turned exactly one test red; rendering into a 24-bit bitmap turned the three pixel-checking screenshot tests red.
 
 ## Related
 

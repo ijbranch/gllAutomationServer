@@ -34,6 +34,8 @@ a registered command (`RegisterCommand` + `ResolveForm` / `ResolveComponent`), n
 - Tests: `Tests\gllAutomationServerTests.dproj` (DUnitX console, Win64 Debug). It links the package's DCUs
   from `..\37.0\<Platform>\<Config>`, so **rebuild the package first** or the run tests the old binary.
   Run `Tests\Win64\Debug\gllAutomationServerTests.exe --exitbehavior:Continue`.
+- **Session 0 has no desktop.** GITLAKMCP's `test_run` launches from its service, so the 4 screenshot-render tests
+  ignore themselves there (18 passed / 4 ignored). Run the exe from a desktop session to exercise them (22/22).
 - Bump `SERVER_VERSION` (the wire-protocol version `ping` reports) when commands or fields change, and the
   `PROTOCOL_VERSION` constant in the test with it. It is separate from the package's file version.
 - A stale `gllAutomationServer.dcu` anywhere on the library path shadows this one. GITLAKLib's output
@@ -41,5 +43,8 @@ a registered command (`RegisterCommand` + `ResolveForm` / `ResolveComponent`), n
 
 ## Licence
 
-MIT (`LICENSE`), because the code was already published under MIT inside gllIdeAutomation. New files take
-the short MIT header the unit carries, not the GITLAK proprietary block.
+Proprietary, in-house (Ian, 2026-10-13: "the two automation projects are now purely ours"). Every source file
+opens with the GITLAK header block - the GITLAKMCP form, without GITLAKLib's old licensee clause - followed by
+its own descriptive comment. Until that day the code was MIT and gllIdeAutomation was public; `LICENSE` says
+copies taken under MIT before then keep those rights. Estate rules apply in full: Delphi 13 floor
+(`CompilerVersion >= 37`), FULL DocInsight, zero hints and warnings.

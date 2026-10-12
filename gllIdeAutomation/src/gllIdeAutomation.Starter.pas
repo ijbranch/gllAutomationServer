@@ -1,4 +1,33 @@
-﻿///<summary>
+﻿(* GITLAK Software
+  ***************************************************************************
+
+    (C) 2026 Ian Branch (GITLAK Software). All rights reserved.
+
+    This code and all associated intellectual property, including proprietary
+    algorithms and confidential information, are the exclusive property of Ian
+    Branch (GITLAK Software).
+
+    Any reproduction, distribution, or use, in whole or in part, by any other
+    party is strictly prohibited without the express written permission of the
+    Author.
+
+    Complete development history is retained & maintained in my Private GitHub
+    Repository.
+
+    THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED.
+    IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DAMAGES ARISING IN CONNECTION
+    WITH THE USE OF THIS SOFTWARE.
+
+  ***************************************************************************
+
+  Author(s) :
+  Ian Branch - GITLAK Software.
+
+  ***************************************************************************
+*)
+
+///<summary>
 /// Starts the automation server inside the Delphi IDE, so an external agent can drive the IDE
 /// through its live VCL component model instead of synthesising keystrokes.
 ///
@@ -22,8 +51,8 @@
 /// tools/read_pane.py for the clipboard route round that.</para> </summary>
 unit gllIdeAutomation.Starter;
 
-{$IF CompilerVersion < 33.0}
-  {$MESSAGE FATAL 'gllIdeAutomation requires Delphi 10.3 Rio or later.'}
+{$IF CompilerVersion < 37.0}
+  {$MESSAGE FATAL 'gllIdeAutomation requires Delphi 13 Florence or later.'}
 {$IFEND}
 
 interface

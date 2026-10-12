@@ -70,7 +70,7 @@
         <VerInfo_MinorVer>0</VerInfo_MinorVer>
         <VerInfo_Release>0</VerInfo_Release>
         <VerInfo_Build>0</VerInfo_Build>
-        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllAutomationServer - in-app automation server;FileVersion=1.0.0.0;InternalName=gllAutomationServer;LegalCopyright=Copyright (c) 2016-2026 Ian Branch (GITLAK Software), MIT Licence;LegalTrademarks=;OriginalFilename=;ProductName=gllAutomationServer;ProductVersion=1.0.0.0;Comments=;CFBundleName=</VerInfo_Keys>
+        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllAutomationServer - in-app automation server;FileVersion=1.0.0.0;InternalName=gllAutomationServer;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllAutomationServer;ProductVersion=1.0.0.0;Comments=;CFBundleName=</VerInfo_Keys>
         <RuntimeOnlyPackage>true</RuntimeOnlyPackage>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Base_Win32)'!=''">
@@ -97,14 +97,14 @@
     <PropertyGroup Condition="'$(Cfg_1_Win64)'!=''">
         <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
         <VerInfo_AutoIncVersion>true</VerInfo_AutoIncVersion>
-        <VerInfo_Build>2</VerInfo_Build>
-        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllAutomationServer - in-app automation server;FileVersion=1.0.0.2;InternalName=gllAutomationServer;LegalCopyright=Copyright (c) 2016-2026 Ian Branch (GITLAK Software), MIT Licence;LegalTrademarks=;OriginalFilename=;ProductName=gllAutomationServer;ProductVersion=1.0.0.2;Comments=;CFBundleName=</VerInfo_Keys>
+        <VerInfo_Build>10</VerInfo_Build>
+        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllAutomationServer - in-app automation server;FileVersion=1.0.0.10;InternalName=gllAutomationServer;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllAutomationServer;ProductVersion=1.0.0.10;Comments=;CFBundleName=</VerInfo_Keys>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_2_Win64)'!=''">
         <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
         <VerInfo_AutoIncVersion>true</VerInfo_AutoIncVersion>
-        <VerInfo_Build>4</VerInfo_Build>
-        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllAutomationServer - in-app automation server;FileVersion=1.0.0.4;InternalName=gllAutomationServer;LegalCopyright=Copyright (c) 2016-2026 Ian Branch (GITLAK Software), MIT Licence;LegalTrademarks=;OriginalFilename=;ProductName=gllAutomationServer;ProductVersion=1.0.0.4;Comments=;CFBundleName=</VerInfo_Keys>
+        <VerInfo_Build>10</VerInfo_Build>
+        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllAutomationServer - in-app automation server;FileVersion=1.0.0.10;InternalName=gllAutomationServer;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllAutomationServer;ProductVersion=1.0.0.10;Comments=;CFBundleName=</VerInfo_Keys>
     </PropertyGroup>
     <ItemGroup>
         <DelphiCompile Include="$(MainSource)">

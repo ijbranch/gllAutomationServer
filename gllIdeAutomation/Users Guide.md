@@ -150,7 +150,7 @@ $r.ReadLine() | ConvertFrom-Json
 ```
 
 `ping` answers `{ app, pid, version, package, exe, mainForm, server }`, where `server` is the
-protocol version (`0.11`). The two version fields are **not** the same thing and the distinction is
+protocol version (`0.12`). The two version fields are **not** the same thing and the distinction is
 the point: `version` is the **host's** — inside the IDE that is `bds.exe`'s, something like
 `37.0.60952.8797` — while `package` is the version of the BPL holding the server, which is now
 the shared `gllAutomationServer` package (`1.0.0.0`), not this one. To tell which build of

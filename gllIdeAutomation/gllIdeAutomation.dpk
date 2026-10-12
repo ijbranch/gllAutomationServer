@@ -1,18 +1,40 @@
-﻿package gllIdeAutomation;
+﻿(* GITLAK Software
+  ***************************************************************************
+
+    (C) 2026 Ian Branch (GITLAK Software). All rights reserved.
+
+    This code and all associated intellectual property, including proprietary
+    algorithms and confidential information, are the exclusive property of Ian
+    Branch (GITLAK Software).
+
+    Any reproduction, distribution, or use, in whole or in part, by any other
+    party is strictly prohibited without the express written permission of the
+    Author.
+
+    Complete development history is retained & maintained in my Private GitHub
+    Repository.
+
+    THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED.
+    IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY DAMAGES ARISING IN CONNECTION
+    WITH THE USE OF THIS SOFTWARE.
+
+  ***************************************************************************
+
+  Author(s) :
+  Ian Branch - GITLAK Software.
+
+  ***************************************************************************
+*)
+
+package gllIdeAutomation;
 
 {$R *.res}
 {$DESCRIPTION 'IDE Automation (gated by GITLAK_IDE_AUTOMATION=1)'}
-{$IF CompilerVersion >= 36.0}          // 12 Athens and later
-  {$LIBSUFFIX AUTO}
-{$ELSEIF CompilerVersion = 35.0}       // 11 Alexandria
-  {$LIBSUFFIX '280'}
-{$ELSEIF CompilerVersion = 34.0}       // 10.4 Sydney
-  {$LIBSUFFIX '270'}
-{$ELSEIF CompilerVersion = 33.0}       // 10.3 Rio
-  {$LIBSUFFIX '260'}
-{$ELSE}
-  {$MESSAGE FATAL 'gllIdeAutomation requires Delphi 10.3 Rio or later.'}
-{$IFEND}
+// No CompilerVersion guard here: in a package source the System unit is not loaded yet, so
+// CompilerVersion is undeclared and EVERY comparison on it is true (measured 2026-10-13: ">= 37",
+// ">= 36" and "< 37" all fired). The Delphi 13 floor is enforced by the units' guards instead.
+{$LIBSUFFIX AUTO}
 {$DESIGNONLY}
 {$IMPLICITBUILD ON}
 
