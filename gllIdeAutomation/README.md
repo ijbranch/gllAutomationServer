@@ -1,0 +1,249 @@
+# gllIdeAutomation
+
+A design-time package that lets you **drive the Delphi IDE from outside it** — list its forms,
+read and write published properties, click controls, fire actions, answer modal dialogs, take
+screenshots — over a loopback socket, from any language that can open a TCP connection and write
+a line of JSON.
+
+It exists because some questions can only be answered by a running IDE. Whether a debug
+visualizer is offered on a type, what the evaluator calls that type, how a value renders in Local
+Variables: none of that is visible to the compiler, and reading it off screenshots is slow and
+error-prone. This makes the IDE inspectable instead.
+
+Delphi **10.3 Rio and later**, Win32 or Win64. MIT licensed.
+Current version: **1.2.0** (tagged `v1.2.0`, 2026-09-29) — see [CHANGELOG.md](CHANGELOG.md). It carries
+wire protocol `0.9`; the previous release, 1.0.1, carried `0.7`. There is no 1.1.0 release: that number was
+only ever an untagged working version. (1.0.0 was tagged earlier the same day as 1.0.1 and
+superseded within hours; never take 1.0.0.)
+
+Fair warning on that range: it is what the source targets — inline variables set the 10.3 floor,
+and the `$LIBSUFFIX` selection covers 10.3 through 13 — but **13 Florence is the only version it
+has actually been built on**, because it is the only one I have. If you try it on an older IDE I
+would be glad to hear how it went, particularly whether the package suffix comes out right.
+On anything older than 13, open the `.dpk` rather than the `.dproj` — see [Installing](#installing).
+
+## Documentation
+
+| For | Read |
+|---|---|
+| The wire protocol — 14 built-in commands and 21 ToolsAPI ones, the argument vocabulary, 51 error codes, and failures by symptom | [Help.md](Help.md) |
+| Doing a job — start the gated IDE, connect, read a form, drive a control | [Users Guide.md](Users%20Guide.md) |
+| What changed and when | [CHANGELOG.md](CHANGELOG.md) |
+
+## What you can do with it
+
+```
+$env:GITLAK_IDE_AUTOMATION = '1'
+& 'C:\Program Files (x86)\Embarcadero\Studio\37.0\bin64\bds.exe'
+```
+
+The IDE now listens on loopback and announces itself in a discovery file. Then, from anything:
+
+```json
+{ "token":"…", "id":1, "cmd":"tree" }
+{ "id":1, "ok":true, "result":{ "forms":[ {"name":"LocalVarsWindow","class":"TLocalVarsWindow","visible":true}, … ] } }
+```
+
+Around 45 IDE forms come back on a stock install — 44 measured on 2026-09-21 — including
+`LocalVarsWindow`, `WatchWindow`, `CallStackWindow`, `BPWindow` and `EditWindow_0`, plus the forms
+of whatever plugins you have, since it walks `Screen.Forms` rather than knowing anything about the
+IDE. Treat the count as indicative: it moves with the IDE version, the installed packages and what
+is open at the time.
+
+Commands: `ping`/`info`, `tree`, `get`, `set`, `click`, `action`, `keys`, `dialogs`, `screenshot`,
+`dataset`, `dataset_op`, `field_get`, `field_set`, `tree_text`. Forms are addressed by name, `"main"` or
+`"active"`; components by their owned name.
+
+Through the ToolsAPI it also closes the IDE without it stopping to ask (`ide_modified`, `ide_quit`),
+walks and clicks the main menu, including items no action sits behind (`ide_menu`, `ide_menu_click`),
+and drives the IDE's own debugger: attach, pause, run, step, run to a line, threads, call stack,
+registers, memory, the IDE's evaluator and source breakpoints (`debug_*`). See
+[Help.md](Help.md#toolsapi-commands). Every request gets a reply — a malformed one comes back
+as an error carrying your `id`, not as a closed connection.
+
+## Installing
+
+1. Build `gllIdeAutomation.dproj` for the platform matching your IDE — **Win64 for `bin64\bds.exe`**,
+   **Win32 for `bin\bds.exe`**. A design-time package must match the bitness of the IDE loading
+   it, and the wrong one silently never loads. Both platforms are configured and both build clean.
+
+   **On an IDE older than 13 Florence, open `gllIdeAutomation.dpk` instead** and let your IDE
+   write its own `.dproj` alongside it. The `.dpk` is the actual project and is version-agnostic;
+   the `.dproj` here is just the MSBuild wrapper 13 Florence happens to have generated, and every
+   IDE rewrites it to its own format on open. Don't commit the one yours produces.
+2. **Component > Install Packages > Add**, and pick the built BPL. Note the registration is
+   per-bitness: the 64-bit IDE reads `Known Packages x64`, the 32-bit IDE reads `Known Packages`.
+
+`tools/Start-IDE.ps1` then launches the IDE correctly and tells you whether the server came up.
+
+## Gating — it does nothing unless you ask
+
+Installing the package does not start anything. The server starts only when the environment
+variable `GITLAK_IDE_AUTOMATION` is `1` in the launching environment. An IDE started any other
+way is completely unaffected.
+
+Set it permanently (user scope) if you want every IDE to be drivable; leave it unset and use
+`Start-IDE.ps1` if you would rather opt in per session.
+
+It is deliberately **not** a command-line switch: `bds.exe` parses its own command line and
+treats arguments it does not recognise as files to open.
+
+## Security
+
+Loopback only (`127.0.0.1`), and every command must carry a per-session GUID token that is
+written to the discovery file at
+`C:\ProgramData\GITLAK\Automation\<pid>.json`. Another local process cannot drive your IDE
+without reading that file. There is no remote surface at all.
+
+That said: **this is a development tool.** Anything that can click buttons and set properties in
+your IDE deserves the same suspicion you would apply to a debugger. It is off by default for that
+reason.
+
+## Reading the debugger panes
+
+`get` cannot read Local Variables, Watch or Call Stack: they are `TVirtualStringTree`, which holds
+no text of its own and asks its `OnGetText` handler for each cell as it paints. **`tree_text` reads
+them anyway**, by standing in front of that handler while it makes the pane paint every row:
+
+```json
+{ "token":"…", "id":2, "cmd":"tree_text", "form":"LocalVarsWindow", "name":"LocalsTreeView" }
+```
+
+The reply is every displayed row as `{ level, cells }`, with the header captions and a `complete`
+flag. No coordinates, no clicks. Only displayed rows are read, so expand a node to read its
+children, and the pane has to be on screen. The technique is Thomas Mueller's, from `TREETEXT` in
+GxInspect, the GExperts inspection server; see [Help.md](Help.md) for the details.
+
+The older route is kept as a fallback. The panes' popup menu items *are* addressable, so select a
+row and fire "Copy Value":
+
+```
+python tools/read_pane.py 300 1335
+'TBaseThing(Name=base)'
+```
+
+Selecting the row needs a real mouse click, which `tools/click.py` provides.
+
+### The coordinate trap
+
+On a scaled display there are two coordinate spaces and they do not match. With two 4K monitors
+at 150%:
+
+| | Space | Size |
+|---|---|---|
+| `CopyFromScreen` screenshots | **physical** — it crops, it does not scale | 7680x2160 |
+| `SetCursorPos` from a DPI-*unaware* process | **virtualised** | 5120x1440 |
+
+Click a coordinate read off a screenshot without allowing for that and you land two thirds of the
+way to the target — silently, with `SendInput` reporting success. `click.py` declares
+`PER_MONITOR_AWARE_V2` so both spaces are physical.
+
+It also refuses to click if the cursor will not stay where it was put, so a human moving the
+mouse does not receive the click.
+
+**Take coordinates from a fresh screenshot every time.** Row positions shift when a node is
+expanded, and a stale coordinate reads a *different row* perfectly happily rather than failing.
+Cross-check with `--name`.
+
+## Tools
+
+| Tool | Does |
+|---|---|
+| `tools/Start-IDE.ps1` | Launches the IDE with the gate set, waits for it to load, reports whether the server came up. Finds the newest installed IDE from the registry; `-Version 22.0` or `-BdsPath` to choose another. `-NoAutomation` for a clean comparison IDE. |
+| `tools/click.py` | Clicks at a screen coordinate. Read its docstring before rolling your own. |
+| `tools/read_pane.py` | `read_pane.py X Y [--pane locals\|watch] [--name]` — selects the row and prints its value. Speaks the protocol directly; no other tooling needed. |
+
+## Dependencies
+
+`rtl`, `vcl`, `designide` (the ToolsAPI commands in `gllIdeAutomation.IdeCommands`), and
+**[gllAutomationServer](https://github.com/ijbranch/gllAutomationServer)** — the automation server
+itself, a runtime package of its own since 2026-10-13. Build that package first (all four modes);
+this one `requires` it, and the IDE loads its BPL from the shared `Bpl` folder. Everything the server
+needs (`vclimg`, `dbrtl`, `IndySystem`, `IndyCore`) ships with Delphi.
+
+## Why the discovery path says GITLAK
+
+`C:\ProgramData\GITLAK\Automation` is where the server has always written its discovery files, and
+existing clients look there. It is a fixed, account-independent location so that a client and the
+application agree regardless of either process's `%TEMP%`. The name is historical rather than
+meaningful — changing it would break every existing client for no functional gain, so it stays.
+It holds one small JSON file per running instance and nothing else.
+
+## Working on it
+
+This repository is private (since 2026-10-13). Things worth knowing before changing it:
+
+- A change to the server itself — a built-in command, addressing, the transport — belongs in
+  **gllAutomationServer**, not here. This package holds only what the IDE alone needs: the gate,
+  the ToolsAPI commands, and `tree_text`.
+- Keep it compiling on **10.3 Rio**. The inline variables set that floor already; please don't
+  raise it without a good reason. Only 13 Florence is built here.
+- **Rebuild with the package unticked or the IDE closed.** An IDE with it installed holds both the
+  `.bpl` and the `.dcp` open, so a build cannot replace them and stops with two
+  `F2039 Could not create output file` errors — from the command line as much as from inside the
+  IDE. Untick it in Component > Install Packages while you work, or build headlessly and re-tick to
+  try the result.
+
+## Provenance
+
+The server was written to drive VCL applications for unattended UI testing; the IDE is a VCL
+application, so it serves the IDE unchanged. Until 2026-10-13 this repository carried a renamed
+copy of it (`gllIdeAutomation.Server`), hand-synced with the original — they drifted 283 lines apart
+once, and every change had to be made twice. The server now has a package of its own, which both
+hosts use. What used to differ is chosen by the host instead: this package starts it with
+`ADisableIdleTimers = False` (an application under test needs its idle timers stopped so it cannot
+log itself out; here that would switch off a third-party plug-in's timer), and adds `tree_text`
+with `RegisterCommand`, as it always added the ToolsAPI commands.
+
+## Generated API documentation
+
+The current documents are the two at the repository root, linked at the top of this file. The pair
+under `docs/` — [docs/Users Guide.md](docs/Users%20Guide.md) and [docs/HELP.md](docs/HELP.md) —
+**predates the estate documentation standard and is superseded**; it is kept only because it was
+published under those names. Read the root pair.
+
+API documentation is generated from the units' XML doc comments by
+[DocInsight](https://devjetsoftware.com/docinsight/); `gllIdeAutomation.diproj` is the project that
+builds it, and the output lands in `build/docs` (not tracked). You do not need DocInsight to build
+or use the package — only to regenerate those pages.
+
+## Layout
+
+```
+gllIdeAutomation.dpk            the design-time package — the real project
+gllIdeAutomation.dproj          13 Florence's MSBuild wrapper, and the version info
+src/gllIdeAutomation.Starter    ~30 lines: the gate, and the call to Start
+src/gllIdeAutomation.IdeCommands  the ToolsAPI commands and tree_text, registered on the server
+src/gllIdeAutomation.TreeText   reads what a virtual tree displays (the debugger panes)
+tools/                          launcher, clicker, pane reader
+```
+
+## Keeping it working
+
+- **Rebuild and re-register after a RAD Studio upgrade.** The BPL is version-suffixed and the
+  registration is per-version. The suffix is picked by `CompilerVersion` in the `.dpk` — `AUTO` on
+  12 Athens and later, an explicit number below that, since `{$LIBSUFFIX AUTO}` is itself a
+  12-and-later feature and would otherwise be the thing that broke the build on an older IDE.
+- **Check which build is loaded before debugging a misbehaving one.** The BPL carries version
+  information, so its Details tab answers the question:
+
+  ```powershell
+  (Get-Item "$env:PUBLIC\Documents\Embarcadero\Studio\37.0\Bpl\Win64\gllIdeAutomation370.bpl").VersionInfo.FileVersion
+  ```
+
+  The version comes from the `.dproj`'s `VerInfo_*` and the build number **auto-increments**
+  (Ian, 2026-10-06: auto-increment on for all our libraries and packages). Delphi bumps it in the
+  per-configuration groups, so Win64 Release and Win64 Debug each keep their own count, and it
+  bumps AFTER compiling: the BPL reports the number from before the bump. `ProductVersion` is kept
+  equal to `FileVersion` at commit by the estate's `sync_dproj_productversion.py` pre-commit hook.
+  To change major, minor or release, edit `VerInfo_MajorVer` / `MinorVer` / `Release` (Project
+  Options > Version Info).
+
+  This replaced, on 2026-10-06, a hand-maintained `gllIdeAutomationVersion.rc` bumped by
+  `tools/bump-build.py`. That design existed to avoid Delphi's per-configuration copies and the
+  `ProductVersion`-lags-`FileVersion` drift; the drift is now handled by the hook, and the copies
+  are simply where the per-configuration counters live.
+- The starter swallows every exception in `initialization` and `finalization`. An exception
+  escaping a design-time package's initialisation is reported to the user as a package load
+  failure, for a facility they did not ask for — a port clash must cost the automation server,
+  never the IDE.

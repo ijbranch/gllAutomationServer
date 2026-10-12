@@ -1,0 +1,30 @@
+﻿package gllIdeAutomation;
+
+{$R *.res}
+{$DESCRIPTION 'IDE Automation (gated by GITLAK_IDE_AUTOMATION=1)'}
+{$IF CompilerVersion >= 36.0}          // 12 Athens and later
+  {$LIBSUFFIX AUTO}
+{$ELSEIF CompilerVersion = 35.0}       // 11 Alexandria
+  {$LIBSUFFIX '280'}
+{$ELSEIF CompilerVersion = 34.0}       // 10.4 Sydney
+  {$LIBSUFFIX '270'}
+{$ELSEIF CompilerVersion = 33.0}       // 10.3 Rio
+  {$LIBSUFFIX '260'}
+{$ELSE}
+  {$MESSAGE FATAL 'gllIdeAutomation requires Delphi 10.3 Rio or later.'}
+{$IFEND}
+{$DESIGNONLY}
+{$IMPLICITBUILD ON}
+
+requires
+  rtl,
+  vcl,
+  designide,
+  gllAutomationServer;
+
+contains
+  gllIdeAutomation.Starter in 'src\gllIdeAutomation.Starter.pas',
+  gllIdeAutomation.TreeText in 'src\gllIdeAutomation.TreeText.pas',
+  gllIdeAutomation.IdeCommands in 'src\gllIdeAutomation.IdeCommands.pas';
+
+end.

@@ -1,0 +1,32 @@
+# Delphi build artefacts
+*.dcu
+*.dcp
+*.bpl
+*.rsm
+*.dsk
+*.~dsk
+*.local
+*.identcache
+*.stat
+*.map
+*.drc
+*.cfg
+*.delphilsp.json
+*.dproj.local
+*.dproj.user
+__history/
+__recovery/
+dcu/
+
+# Windows / editor cruft
+Thumbs.db
+desktop.ini
+*.~*
+
+# Python
+__pycache__/
+*.pyc
+
+# Generated documentation. The .diproj that produces it IS tracked.
+build/
+
