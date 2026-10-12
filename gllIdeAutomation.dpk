@@ -19,14 +19,10 @@
 requires
   rtl,
   vcl,
-  vclimg,
-  dbrtl,
-  IndySystem,
-  IndyCore,
-  designide;
+  designide,
+  gllAutomationServer;
 
 contains
-  gllIdeAutomation.Server in 'src\gllIdeAutomation.Server.pas',
   gllIdeAutomation.Starter in 'src\gllIdeAutomation.Starter.pas',
   gllIdeAutomation.TreeText in 'src\gllIdeAutomation.TreeText.pas',
   gllIdeAutomation.IdeCommands in 'src\gllIdeAutomation.IdeCommands.pas';

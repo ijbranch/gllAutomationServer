@@ -10,8 +10,12 @@ The source targets **Delphi 10.3 Rio and later** (the `{$LIBSUFFIX}` ladder in
 `gllIdeAutomation.dpk` and a `{$MESSAGE FATAL}` below `CompilerVersion 33.0` say so), but this
 repository is built and used on **Delphi 13 / RAD Studio 37.0 only**, VCL, **Win32 + Win64**.
 
-This file is the **lookup** document: the Pascal surface, the wire protocol, the error codes, and
-the failures with their exact text. For how to get it running and drive it, read
+This file is the **lookup** document for what this package adds: the gate, the 22 commands it
+registers, their error codes, and the IDE-specific failures with their exact text. The automation
+server itself (transport, discovery, addressing, the built-in commands and their error codes,
+threading, `keys`) is the runtime package `gllAutomationServer`, documented in
+`D:\gllAutomationServer\Help.md` ([GitHub](https://github.com/ijbranch/gllAutomationServer)).
+For how to get it running and drive it, read
 [Users Guide.md](Users%20Guide.md). The history is in [CHANGELOG.md](CHANGELOG.md); the
 rationale and the tooling are in [README.md](README.md).
 
@@ -22,33 +26,24 @@ rationale and the tooling are in [README.md](README.md).
 
 ## 1. The Pascal surface
 
-The units are in `src\`, all listed in the `.dpk` `contains` clause. There is no component to drop
-on a form. The public surface is one static class, `TAutomationServer`, and `EAutoError`, the
-exception a registered command raises to fail with a code of its own.
+The units are in `src\`, all listed in the `.dpk` `contains` clause: `gllIdeAutomation.Starter`,
+`gllIdeAutomation.TreeText` and `gllIdeAutomation.IdeCommands`. There is no component to drop on
+a form and no public class of this package's own: everything is built on `TAutomationServer` from
+the `gllAutomationServer` runtime package.
 
-### `gllIdeAutomation.Server`
+### What it uses from `gllAutomationServer`
 
-| Member | Signature | Purpose |
-|---|---|---|
-| `TAutomationServer.Start` | `class procedure Start( const AAppName: string )` | Starts the singleton loopback server, advertising `AAppName`. Idempotent. |
-| `TAutomationServer.Stop` | `class procedure Stop` | Stops and frees the server, removing the discovery file. Idempotent. |
-| `TAutomationServer.IsRunning` | `class function IsRunning: Boolean` | True while the server is running. |
-| `TAutomationServer.Port` | `class function Port: Word` | The bound loopback port; `0` when not running. |
-| `TAutomationServer.RegisterCommand` | `class procedure RegisterCommand( const AName: string; const AHandler: TAutomationCommand; AThread: TAutomationCommandThread = actMainThread )` | Adds a command. Built-in commands are matched first, so a registered name can never shadow one. `actWorkerThread` is for a handler that must WAIT on the main thread, and synchronises each step itself. |
-| `TAutomationServer.UnregisterCommand` | `class procedure UnregisterCommand( const AName: string )` | Removes one; unknown names are ignored. |
+The server lives in its own package and repository, `D:\gllAutomationServer` (unit
+`gllAutomationServer`, package version 1.0.0.0, wire protocol version `0.11`), which this package
+`requires`. Its full API is in `D:\gllAutomationServer\Help.md`; the parts used here:
 
-Implementation-only constants worth knowing, because they define observable behaviour:
-
-| Constant | Value | Meaning |
-|---|---|---|
-| `AUTOMATION_PORT_BASE` | `8730` | First loopback port tried. |
-| `AUTOMATION_PORT_SPAN` | `200` | Consecutive ports probed before the bind is abandoned. |
-| `SERVER_VERSION` | `'0.9'` | Reported as `server` by `ping`/`info`. |
-| `MAX_REQUEST_BYTES` | `1048576` | Longest request line accepted; longer is `RequestTooLong`. |
-| `CLICK_COUNT_MAX` | `1000` | Upper bound on `click`'s `count`. |
-| `PROPLIST_MAX` | `100` | Cap on the property list returned with a `NoProp` failure. |
-| `DISMISS_WAIT_MS` | `750` | How long a dialog click waits to see the window go away before reporting `dismissed`. |
-| `DISCOVERY_DIR` | `C:\ProgramData\GITLAK\Automation` | Where the per-PID discovery file is written. Created with a restricted DACL — see [Security](#8-security). |
+| Member | Used for |
+|---|---|
+| `TAutomationServer.Start( const AAppName: string; ADisableIdleTimers: Boolean = True )` | Called by the starter as `Start( APP_NAME, False )`. `False` leaves the IDE's idle timers alone: they belong to its plug-ins. |
+| `TAutomationServer.Stop` | Called by the starter's `finalization`; removes the discovery file. |
+| `TAutomationServer.RegisterCommand` / `UnregisterCommand` | The 22 commands of `gllIdeAutomation.IdeCommands`. Built-in commands are matched first, so a registered name can never shadow one. |
+| `TAutomationServer.ResolveForm( ARequest: TJSONObject ): TForm` / `ResolveComponent( ARequest: TJSONObject; AForm: TForm ): TComponent` | `tree_text` resolves `form` and `name` exactly as the built-ins do, so it takes dotted paths and synthetic names and answers `NoForm` / `NoComp` / `Ambiguous` the same way. |
+| `EAutoError` | How a registered command fails with a code of its own. |
 
 ### `gllIdeAutomation.Starter`
 
@@ -60,8 +55,9 @@ entire job is the gate:
 | `ENV_GATE` | `GITLAK_IDE_AUTOMATION` | Must be `1` (after `Trim`) or nothing starts. |
 | `APP_NAME` | `DelphiIDE` | The name the IDE is advertised under — this is what `app_list` shows. |
 
-Once the server has started it calls `RegisterIdeCommands` from `gllIdeAutomation.IdeCommands`,
-and on the way out `UnregisterIdeCommands`. See [ToolsAPI commands](#toolsapi-commands).
+It starts the server with `TAutomationServer.Start( APP_NAME, False )`, then calls
+`RegisterIdeCommands` from `gllIdeAutomation.IdeCommands`; on the way out it stops the server and
+calls `UnregisterIdeCommands`. See [Registered commands](#registered-commands).
 
 Both `initialization` and `finalization` are wrapped in a bare `try..except` that swallows
 everything **deliberately**: an exception escaping a design-time package's initialisation is
@@ -72,65 +68,51 @@ must cost the automation server, never the IDE.
 
 ## 2. The wire protocol
 
-Loopback TCP (`127.0.0.1`), one JSON object per line in, one line out. Every request must carry
-the `token` from that instance's discovery file, or the connection is answered with
-`Unauthorised` before the command is even looked at.
+### The server, in brief
 
-### Request envelope
+Loopback TCP (`127.0.0.1`, port scanned upward from `8730`), one JSON object per line in, one
+line out. Every request carries the per-session `token` from the instance's discovery file
+(`C:\ProgramData\GITLAK\Automation\<pid>.json`, `app` = `DelphiIDE`, **written with a UTF-8 BOM**,
+so read it with `encoding="utf-8-sig"`), an optional `id` echoed on every reply, and `cmd`.
+Every request gets a reply; a failure is `{ id, ok:false, error:{ code, message, data? } }`.
+A discovery file left behind means the host died: the name is the PID, so check the process is
+alive before trusting it. The server sweeps dead PIDs' files on start.
 
-| Field | Required | Meaning |
-|---|---|---|
-| `token` | yes | The per-session GUID from the discovery file. Checked first. |
-| `id` | no | Echoed back on **every** response, success or failure. Defaults to `0`. |
-| `cmd` | yes | One of the commands below. |
+The built-in commands are `ping` / `info`, `tree`, `get`, `set`, `click`, `action`, `keys`,
+`dialogs`, `screenshot`, `dataset`, `dataset_op`, `field_get` and `field_set`. Inside the IDE,
+`ping` reports `version` as `bds.exe`'s, `package` as the `gllAutomationServer` BPL's (`1.0.0.0`)
+and `server` as the protocol version (`0.11`). Since 0.11 a component `name` may be a dotted path
+(`fraA.edtTown`) or a synthetic name for an unnamed component (`@TButton#2`), reaches frame-owned
+and docked controls, and a name that matches several is `Ambiguous`; `prop` may be a dotted path
+(`Font.Size`) and `TStrings` read and write as text.
 
-A field of the wrong JSON type is treated as absent rather than as a reason to fail: `{"id":"abc"}`
-leaves `id` at `0`, and a non-string `cmd` falls through to `UnknownCmd`. Nothing in the envelope
-can cost you the connection — see [Every request gets a reply](#every-request-gets-a-reply).
-
-A request line longer than **1 MB** (`MAX_REQUEST_BYTES`) is refused with `RequestTooLong` and the
-connection is then closed, because the rest of that line would otherwise be read as if it were the
-next request.
-
-### Addressing
-
-| Key | Accepts |
-|---|---|
-| `form` | a form's `Name`, `main`, or `active`. Omitted or empty resolves to the main form. |
-| `name` | a component **owned** by that form. Ownership, not parenting. Omit to address the form itself. |
-
-### Commands
-
-Read out of `TServerImpl.ExecuteCommand` and the `AutoCmd*` functions.
-
-| `cmd` | Request fields | Result |
-|---|---|---|
-| `ping` / `info` | — | `{ app, pid, version, package, exe, mainForm, server }` — `version` is the **host executable's** (inside the IDE, `bds.exe`'s); `package` is **this package's own** BPL version |
-| `tree` | `form?` | No `form`: `{ forms:[ { name, class, visible } … ] }` over `Screen.Forms`. With `form`: `{ form, class, components:[ … ] }` |
-| `get` | `form?`, `name?`, `prop` | `{ name, prop, value }` |
-| `set` | `form?`, `name?`, `prop`, `value` | `{ name, prop, value }`, plus `previous` and `changed` — `value` is **read back** after the write, `previous` is the value before it, `changed` compares the two. **Both** are omitted together when the property has no readable getter (or its getter raised), so test for `changed` rather than assuming it |
-| `click` | `form?`, `name`, `mode?`, `count?` | `{ clicked, mode, clicksDispatched }`, plus `posted:true` in message mode, plus `stoppedReason` / `stoppedMessage` when a handler raised |
-| `action` | `form?`, `name` | `{ executed, fromComponent }` |
-| `dialogs` | `button?` | No `button`: `{ windows:[ { hwnd, class, caption, owned, enabled, buttons } … ] }`. With `button`: `{ clicked, dialog, dismissed }` — `dismissed` says whether the window actually went away, not merely whether a message was sent |
-| `screenshot` | `area?` | `{ path, width, height, area }` |
-| `keys` | `form?`, `name?`, `text?`, `keys?`, `focus?`, `timeoutMs?` | `{ target, strokes, strokesSent, completed, modalOpen, stoppedReason? }` — types `text`, then sends the `keys` chords, to a windowed control (no `name`: the form's focused control) through the host's own message loop, and answers once they have been delivered. `focus` (default true) focuses the control first. `stoppedReason` is `modal` (a keystroke opened a modal window; the rest were not sent), `targetGone` or `timeout`. See [Keyboard input](#keyboard-input-keys) |
-| `dataset` | `form?`, `name`, `fields?` | `{ dataset, active }` — and, **only when the dataset is open**, `recordCount`, `recNo`, `bof`, `eof`, plus `fields` when `fields:true`. A closed dataset is reported, not an error, so read `active` before the rest |
-| `dataset_op` | `form?`, `name`, `op` | `{ dataset, op, state, recNo }` |
-| `field_get` | `form?`, `name`, `field` | `{ dataset, field, type, isNull, value }` |
-| `field_set` | `form?`, `name`, `field`, `value` | `{ dataset, field, state, isNull, value }` |
-| `tree_text` | `form?`, `name`, `max?` | `{ name, class, columns, rows:[ { level, cells } … ], rowsRead, rootCount, complete, notes }` — every **displayed** row of a virtual tree, in display order. `columns` are the header captions by column index; `cells` are indexed the same way, trailing empty cells dropped; `level` is the nesting depth, `-1` if unreadable. `complete:false` always comes with a note saying why. **Fork-only** — see [§4](#4-scope-of-this-fork) |
+Their fields, results, error codes, threading and the `keys` vocabulary are documented once, in
+`D:\gllAutomationServer\Help.md`. This file does not repeat them.
 
 There is no general `wait` command. Polling is a client concern; a blocking wait would hold the
 connection and the VCL thread it marshals onto. The one exception is the debugger commands that set
 a process running, which take a `wait` of their own: only the debugger can say when a process has
 stopped, and they wait on the worker thread, not the VCL thread.
 
-### ToolsAPI commands
+### Registered commands
 
-Registered by `src\gllIdeAutomation.IdeCommands.pas` through `TAutomationServer.RegisterCommand`,
-so the vendored server body stays free of the ToolsAPI. Chosen after reading GxInspect's
-README, whose measured findings shaped several of them; each is cited in the unit. The code is
-written here against `ToolsAPI.pas`, not taken from GxInspect (MPL).
+`src\gllIdeAutomation.IdeCommands.pas` registers 22 commands through
+`TAutomationServer.RegisterCommand`: `tree_text` and the 21 ToolsAPI commands. `COMMAND_NAMES`
+lists them, `tree_text` first. To a caller they are no different from built-ins.
+
+#### `tree_text`
+
+| `cmd` | Request fields | Result |
+|---|---|---|
+| `tree_text` | `form?`, `name`, `max?` | `{ name, class, columns, rows:[ { level, cells } … ], rowsRead, rootCount, complete, notes }` — every **displayed** row of a virtual tree, in display order. `columns` are the header captions by column index; `cells` are indexed the same way, trailing empty cells dropped; `level` is the nesting depth, `-1` if unreadable. `complete:false` always comes with a note saying why. `form` and `name` are resolved by the server's `ResolveForm` / `ResolveComponent`, so they are addressed exactly as for `get` |
+
+Its handler, `CmdTreeText`, runs on the main thread; the reader is
+`src\gllIdeAutomation.TreeText.pas`. See [`get` cannot read the debugger panes](#get-cannot-read-the-debugger-panes--use-tree_text).
+
+#### ToolsAPI commands
+
+Chosen after reading GxInspect's README, whose measured findings shaped several of them; each is
+cited in the unit. The code is written here against `ToolsAPI.pas`, not taken from GxInspect (MPL).
 
 | `cmd` | Request fields | Result |
 |---|---|---|
@@ -181,119 +163,42 @@ measured). Make the project that was run active again and everything comes back.
 
 | Field | Command | Accepted values |
 |---|---|---|
-| `mode` | `click` | `direct` (default — calls `OnClick`) or `message` (posts `BM_CLICK` and replies at once). Anything else → `BadMode`. |
-| `count` | `click` | `1` (default) to `CLICK_COUNT_MAX` (1000). Outside that range → `BadCount`. The reply's `clicksDispatched` says how many actually went out, which is fewer than `count` when a handler raised. |
 | `max` | `tree_text` | Row limit, default `2000`; clamped to `1`..`100000`. Reaching it ends the read with `complete:false` and a note. |
 | `mode` | `ide_quit` | `refuse` (default), `save`, `discard`, `ask`. Anything else → `BadRequest`. |
 | `mode` | `debug_step` | `over` (default), `into`, `out` (run until the function returns), `toSource`, `instInto`, `instOver`. Anything else → `BadRequest`. |
 | `path` | `ide_menu`, `ide_menu_click` | Steps separated by `\|`, from the menu bar down. Each step is a component name or a caption; a caption is compared without its `&` and without case, and matches by its beginning when nothing matches it whole. A beginning that matches several items → `AmbiguousMenuItem`. Names are the dependable choice in a localised IDE; what the IDE generates (Reopen, Desktops, the user's tools) has no name and can only be named by caption. |
 | `wait` | `debug_run`, `debug_step`, `debug_run_to` | Milliseconds, clamped to `0`..`120000`. |
-| `op` | `dataset_op` | `insert`, `append`, `edit`, `post`, `cancel`, `refresh`, `first`, `last`, `next`, `prior`. Lower-cased and trimmed first; anything else → `BadOp`. |
-| `keys` | `keys` | Chords separated by spaces or commas, each one key with optional `Ctrl+` / `Shift+` / `Alt+`: `A`-`Z`, `0`-`9`, any single character the layout types with at most Shift, `F1`-`F24`, `Enter` `Return` `Tab` `Esc` `Escape` `Space` `Backspace` `Delete` `Del` `Insert` `Ins` `Home` `End` `PgUp` `PgDn` `Up` `Down` `Left` `Right` `Plus` `Minus` `Comma` `Period` `Apps`. Case-insensitive. Anything else, or modifiers with no key → `BadKeys`. |
-| `timeoutMs` | `keys` | Milliseconds to wait for delivery, default `5000`, clamped to `100`..`60000`. |
-| `area` | `screenshot` | `virtual` (the whole virtual screen), `window` (the app's active window rect), anything else → the monitor the active window is on. The result's `area` field reports which of `virtual` / `window` / `monitor` was used. |
 
-### Which thread a command runs on
+The built-in commands' vocabularies (`click` `mode` and `count`, `dataset_op` `op`, `keys` chords
+and `timeoutMs`, `screenshot` `area`) are in `D:\gllAutomationServer\Help.md`.
+
+### Which thread a registered command runs on
 
 This is not cosmetic — it is why some commands work while a modal dialog is blocking and others
 do not.
 
-| Runs on the worker thread | Runs marshalled to the main VCL thread |
+| Registered `actWorkerThread` | Registered `actMainThread` (marshalled to the VCL thread) |
 |---|---|
-| `dialogs`, `screenshot`, `keys`, `debug_run`, `debug_step`, `debug_run_to` | everything else |
+| `debug_run`, `debug_step`, `debug_run_to` | `tree_text` and every other `ide_*` / `debug_*` command |
 
-`dialogs` enumerates top-level windows with the Win32 API and clicks with
-`SendMessageTimeout( …, BM_CLICK, …, SMTO_ABORTIFHUNG, 5000, … )`, so it still answers a dialog
-whose modal loop has blocked `Synchronize`. `screenshot` sets
-`SetThreadDpiAwarenessContext( THandle( -4 ) )` — per-monitor-aware V2 — on the capture thread,
-so it captures in physical pixels even though the IDE's UI thread is DPI-unaware.
-
-### Keyboard input (`keys`)
-
-`keys` synchronises only its start onto the VCL thread (resolve, validate, focus), then waits on
-the worker thread while the VCL thread delivers the strokes. Each stroke sets the thread's keyboard
-state (the modifiers VCL reads through `GetKeyState`, with Caps Lock cleared), posts the key-down
-and key-up to the control, and posts a step marker to `Application.Handle`; the marker is reposted
-once so the `WM_CHAR` that `TranslateMessage` queues is delivered before the next stroke. Because
-the messages go through the host's own loop, `Application.OnMessage`, `KeyPreview`, menu and action
-shortcuts, Tab / Enter / Esc dialog navigation and `OnKeyDown` / `OnKeyPress` / `OnKeyUp` all run
-as for a real keyboard, without the host being in the foreground and without synthesising global
-input. The saved keyboard state is restored when the sequence ends.
-
-- Typed text uses the key (plus Shift) the current layout types each character with; a character
-  no key produces without Ctrl/Alt (AltGr, or not on the layout) is posted as a bare `WM_CHAR`, so it
-  fires `OnKeyPress` only. A line break is typed as Enter.
-- A keystroke that opens a modal window is detected at the next step (the target's form is disabled)
-  and the sequence stops with `stoppedReason:"modal"` instead of typing into the control behind it.
-  Answer the modal with `dialogs`.
-- One sequence at a time: a second `keys` while one is being delivered → `Busy`.
-- An Alt chord that opens a menu enters the menu's own modal loop and is best-effort.
-
-### Properties returned by `tree`
-
-`tree` does **not** dump every published property. `CompToJSON` emits a fixed ten, and only those
-the component actually publishes:
-
-`Caption`, `Text`, `Visible`, `Enabled`, `Checked`, `ItemIndex`, `Left`, `Top`, `Width`, `Height`
-
-Anything else needs an explicit `get`.
-
-### The discovery file
-
-One per running instance, at `C:\ProgramData\GITLAK\Automation\<pid>.json`, **written with a
-UTF-8 BOM** — read it with `encoding="utf-8-sig"` or `json.load` throws.
-
-| Field | Source |
-|---|---|
-| `app` | the `AAppName` passed to `Start` — `DelphiIDE` for this package |
-| `pid` | `GetCurrentProcessId` |
-| `port` | the bound loopback port |
-| `token` | `TGuid.NewGuid.ToString`, regenerated every session |
-| `started` | `DateToISO8601( Now, False )` — local time, no false `Z` |
-
-It is deleted on clean shutdown. A file left behind means the host died — the name is the PID, so
-check the process is alive before trusting it, and note that a consumer which takes the *first*
-file matching an `app` name will otherwise pick a corpse.
-
-The server also sweeps the directory on startup, deleting any `<pid>.json` whose process is no
-longer running. A PID that has since been reused reads as alive and is left alone, which errs
-towards keeping a stale file rather than deleting a live one.
+The worker-thread three wait for the debugger to stop the process, and synchronise each step onto
+the main thread themselves. Which built-ins run on the worker thread (`dialogs`, `screenshot`, and
+`keys` after its start) is documented with the server.
 
 ---
 
 ## 3. Error codes
 
-Every failure returns `{ id, ok:false, error:{ code, message } }` with a stable `code`. The full
-set, from the `EAutoError.CreateCode` / `CreateCodeData` sites and from the pre-dispatch path and
-the dispatcher:
+Every failure returns `{ id, ok:false, error:{ code, message } }` with a stable `code`. The
+envelope and built-in codes (`Unauthorised`, `UnknownCmd`, `RequestTooLong`, `Internal`, `NoProp`,
+`Ambiguous`, `NotObject`, `NilObject`, `NotScalar`, `ReadOnlyProp`, the `click` / `keys` / dataset
+codes and the rest) are listed in `D:\gllAutomationServer\Help.md`. The codes the 22 registered
+commands raise, from their `EAutoError.CreateCode` / `CreateCodeData` sites:
 
 | Code | Raised when |
 |---|---|
-| `BadRequest` | the line did not parse as a JSON object |
-| `Unauthorised` | `token` is missing or does not match this session's |
-| `UnknownCmd` | `cmd` is not one of the commands above |
-| `NoForm` | no form of that name; or `main` with no main form yet; or `active` with no active form |
-| `NoComp` | the named component is not **owned** by the resolved form |
-| `NoProp` | the property is not published on that component (`get` and `set`) |
-| `NotButton` | `mode=message` on something that is not a button-class control |
-| `NotClickable` | the button is not both visible and enabled |
-| `BadMode` | `click` `mode` is neither `direct` nor `message` |
-| `BadCount` | `click` `count` is below 1 or above `CLICK_COUNT_MAX` |
-| `NoOnClick` | the component has no `OnClick` property at all |
-| `NoHandler` | it has `OnClick` but nothing is assigned to it |
-| `NoAction` | the target is neither a `TBasicAction` nor a control with an assigned `Action` |
-| `ActionDisabled` | the resolved action is disabled |
-| `NoButton` | no open dialog has a visible, enabled button matching the requested caption |
-| `NotDataSet` | the component is neither a `TDataSet` nor a `TDataSource` |
-| `DataSetClosed` | the dataset is not open |
-| `NoField` | the dataset has no field of that name |
-| `ReadOnlyField` | `field_set` on a read-only field |
-| `BadOp` | `dataset_op` `op` is not in the vocabulary above |
-| `CaptureFailed` | the GDI screen capture failed |
-| `BadKeys` | `keys` has nothing to send, more than 4096 strokes, an unknown key name, or a chord with no key or two |
-| `Busy` | `keys` while an earlier `keys` sequence is still being delivered |
-| `NotTypable` | `keys` to a control that is not windowed, or is not visible and enabled |
-| `Blocked` | `keys` to a form disabled by a modal window open over it |
+| `BadRequest` | a registered command's argument is missing or of the wrong JSON type (`tree_text` with no `name`, or a `name` that is not a control; `debug_memory` with an unparseable `address`; an empty menu path); or a `mode` outside its vocabulary |
+| `NoForm` / `NoComp` / `Ambiguous` | `tree_text`'s target, from the server's `ResolveForm` / `ResolveComponent`, exactly as for a built-in |
 | `NotVirtualTree` | `tree_text` on a control that is not a `TBaseVirtualTree` descendant (judged by class name) |
 | `NoWindow` | `tree_text` on a tree with no window handle yet |
 | `NotOnScreen` | `tree_text` on a tree whose window is not visible — a hidden pane, or a visible tree inside a hidden parent. Its text only exists while it paints, so show the window first |
@@ -305,7 +210,7 @@ the dispatcher:
 | `SaveFailed` / `CloseFailed` | `ide_quit` - the IDE declined to save or close a module |
 | `NoMenuItem` | a menu path step matches nothing; `error.data` lists what is there |
 | `AmbiguousMenuItem` | a caption beginning matches several items; `error.data` lists them |
-| `NotClickable` | also `ide_menu_click` on a separator, a submenu, or an item that is disabled or hidden or sits in one that is |
+| `NotClickable` | `ide_menu_click` on a separator, a submenu, or an item that is disabled or hidden or sits in one that is |
 | `NoProcess` | a debugger command with nothing being debugged, or with no CURRENT process because another project is active |
 | `NotStopped` | a debugger command that needs the process (or thread) stopped |
 | `NoThread` | no such thread in the current process |
@@ -318,65 +223,39 @@ the dispatcher:
 | `Unreadable` | `debug_memory` could not read even the first byte |
 | `EvalError` / `EvalDeferred` / `EvalBusy` | `debug_eval` - the evaluator's error text; it had to call into the process and has no result yet; it is busy |
 | `BreakpointFailed` / `NoBreakpoint` | the debugger set no breakpoint; there is none on that line to delete |
-| `RequestTooLong` | the request line exceeded `MAX_REQUEST_BYTES` (1 MB); the connection is closed after the reply |
-| `Internal` | any other exception escaping the command — the message is prefixed with the exception class |
 
-A `NoProp` failure additionally carries `error.data`: `{ properties, total, truncated }`, listing
-the published properties the object *does* have, with their live values, capped at `PROPLIST_MAX`
-(100). It is there so a caller that guessed a property name can correct itself without another
-round-trip.
-
-### Every request gets a reply
-
-A well-formed connection is never closed without an answer. That was not always so: until
-2026-09-21 a field of the wrong JSON type — `{"id":"abc"}` was enough — raised inside the envelope
-parsing, which sat outside the dispatcher's own handler, and the exception unwound past the
-marshalling thread into Indy, which closed the socket. The caller saw a dropped connection rather
-than an error, which reads as the server having crashed.
-
-If you do see a connection close with no reply, it is a genuine fault and worth reporting; the one
-deliberate close is `RequestTooLong`, which answers first.
+Any other exception escaping a registered handler comes back as the server's `Internal`. A
+connection closed with no reply is a genuine fault and worth reporting; the one deliberate close is
+`RequestTooLong`, which answers first.
 
 ---
 
-## 4. Scope of this fork
+## 4. Scope of this package
 
 **There is no upstream.** `git remote -v` shows `origin` only
 (`https://github.com/ijbranch/gllIdeAutomation.git`). This is a GITLAK original, not a fork of a
 third-party project, so there is nothing to merge from and no divergence to justify.
 
-What it **is** is a **vendored copy**, and that is the divergence that matters:
+- **The server is not part of this package.** It is the shared runtime package
+  `gllAutomationServer` (`D:\gllAutomationServer`,
+  [GitHub](https://github.com/ijbranch/gllAutomationServer)), which this package `requires`, so the
+  IDE loads the same server unit as every other host. Until 2026-10-13 this repository carried its
+  own copy; that copy is gone, and with it any need to keep two copies in step.
+- **What is here is what only the IDE needs:** the gate (`gllIdeAutomation.Starter`), `tree_text`
+  (the reader in `gllIdeAutomation.TreeText`, the `CmdTreeText` handler in
+  `gllIdeAutomation.IdeCommands`) and the 21 ToolsAPI commands (`gllIdeAutomation.IdeCommands`). All 22 reach the server only through
+  `TAutomationServer.RegisterCommand`, and `tree_text` resolves its target through the server's
+  public `ResolveForm` / `ResolveComponent`, so its wire behaviour is that of a built-in.
+- **`tree_text` lives here** because no application we ship carries a virtual tree. The technique
+  is Thomas Mueller's, from `TREETEXT` in GxInspect, the GExperts inspection server —
+  re-implemented here, not copied; the unit header says so.
+- **The package requires `designide`** (2026-09-29), for `ToolsAPI`; a design-only package running
+  in the IDE loses nothing by it. The server package does not use the ToolsAPI.
+- **The IDE's idle timers are left alone:** the starter passes `ADisableIdleTimers = False` to
+  `Start`.
 
-- `src\gllIdeAutomation.Server.pas` is vendored from GITLAKLib's `gllAutomationServer`, so this
-  package depends on the RTL, the VCL and Indy alone, and **not** on GITLAKLib.
-- **The body is NOT unchanged, and nothing should describe it as such.** It says so itself, at the
-  top of the unit. The fork diverges where the host differs — it runs inside `bds.exe`, not inside
-  an application we ship — and the divergences are the header, the unit name, **two** message
-  literals, the compiler guard, the wording of two comments, and everything marked `FORK` in the
-  source. Those markers are the index: `grep FORK src\gllIdeAutomation.Server.pas`.
-- **The rename is deliberate and must not be undone.** A Delphi unit may exist in only one loaded
-  package, so a copy still called `gllAutomationServer` could not load into an IDE that already
-  has GITLAKLib installed — which is exactly the machine this was written on.
-- **Nothing keeps the two copies in step automatically, and they had already drifted.** On
-  2026-09-21 this copy was found 283 lines and one wire version behind, carrying two defects
-  upstream had already fixed; it was re-synced from 0.8 in a commit of its own, so a future merge
-  can see exactly what came from upstream. Everything marked `FORK` is a fix that belongs upstream
-  too, with one stated exception — carry them back rather than letting this happen again.
-- **`tree_text` exists only here** (2026-09-25), in its own unit, `src\gllIdeAutomation.TreeText.pas`,
-  so the vendored body carries only the dispatch branch and `AutoCmdTreeText`, both marked `FORK`.
-  It is the stated exception above: nothing goes back to GITLAKLib, because no application we ship
-  carries a virtual tree. The technique is Thomas Mueller's, from `TREETEXT` in GxInspect, the
-  GExperts inspection server — re-implemented here, not copied; the unit header says so.
-- **The ToolsAPI commands exist only here** (2026-09-29), in `src\gllIdeAutomation.IdeCommands.pas`,
-  and reach the server only through `TAutomationServer.RegisterCommand`. That registry and making
-  `EAutoError` public were **carried back to GITLAKLib the same day** (`gllAutomationServer` 0.9), and
-  so was **every other `FORK` fix**. GITLAKLib's unit was rebuilt from this body, and now differs from
-  it only by a list at the top of that unit: its header, the unit name, the message literals, no
-  `tree_text`, and a `DisableIdleTimers` call this copy must never make. The `FORK` markers stay here,
-  as the index of what the two copies share. Change one copy, change both.
-- **The package now requires `designide`** (2026-09-29), for `ToolsAPI`. That reverses an earlier
-  deliberate choice, made while nothing here needed the ToolsAPI; a design-only package running in
-  the IDE loses nothing by it. `gllIdeAutomation.Server` itself still does not use the ToolsAPI.
+Verified live 2026-10-13: the IDE loaded the shared package (`ping` answered `package: "1.0.0.0"`,
+`server: "0.11"`) and `tree_text` answered as a registered command.
 
 The version comes from the `.dproj`'s `VerInfo_*` (since 2026-10-06; it was a hand-maintained
 `gllIdeAutomationVersion.rc` before). The build number auto-increments on every build, separately
@@ -388,19 +267,27 @@ for Win64 Release and Win64 Debug, and the BPL reports the number from before th
 
 `gllIdeAutomation.dproj` is a package project and follows the estate package rules.
 
+- **Build `gllAutomationServer` first, in all four modes.** This package `requires` it, so its
+  `.dcp` must exist for the platform and configuration being built, and its BPL must be on `PATH`
+  (the shared `Bpl\<Platform>` folder) for the IDE to load this one. After a change to the server,
+  rebuild it and then this package.
 - **Four modes.** Win32 + Win64 × Debug + Release. `<Platforms>` declares exactly `Win32=True`
   and `Win64=True`, and `TargetedPlatforms` is `3` to match. The package is only finished when
   all four are built.
 - **Which platform you actually need to install** is the bitness of the IDE: `bin64\bds.exe`
   loads the **Win64** BPL, `bin\bds.exe` loads the **Win32** one. The wrong one silently never
   loads.
-- **Output.** The `.dproj` carries the estate standard verbatim:
+- **Output.** The `.dproj` carries the estate standard: one plain value per group, no `Condition`
+  on the property (an in-IDE build re-save keeps only one value per property per group, and
+  deleted the Release paths of the old `Condition=` form - see `CHANGELOG.md`, 2026-10-07):
 
   ```xml
-  <DCC_BplOutput Condition="'$(Config)'=='Release'">$(BDSCOMMONDIR)\Bpl\$(Platform)</DCC_BplOutput>
-  <DCC_BplOutput Condition="'$(Config)'!='Release'">$(BDSCOMMONDIR)\Bpl\$(Platform)\$(Config)</DCC_BplOutput>
-  <DCC_DcpOutput Condition="'$(Config)'=='Release'">$(BDSCOMMONDIR)\Dcp\$(Platform)</DCC_DcpOutput>
-  <DCC_DcpOutput Condition="'$(Config)'!='Release'">$(BDSCOMMONDIR)\Dcp\$(Platform)\$(Config)</DCC_DcpOutput>
+  <!-- Base group -->
+  <DCC_BplOutput>$(BDSCOMMONDIR)\Bpl\$(Platform)\$(Config)</DCC_BplOutput>
+  <DCC_DcpOutput>$(BDSCOMMONDIR)\Dcp\$(Platform)\$(Config)</DCC_DcpOutput>
+  <!-- Release config group -->
+  <DCC_BplOutput>$(BDSCOMMONDIR)\Bpl\$(Platform)</DCC_BplOutput>
+  <DCC_DcpOutput>$(BDSCOMMONDIR)\Dcp\$(Platform)</DCC_DcpOutput>
   ```
 
   Release stays in the shared platform folder because that folder is on `PATH` and is where
@@ -486,15 +373,18 @@ one goes stale the moment the IDE restarts. Re-read the discovery file.
 Expected. The constructor scans upward from `AUTOMATION_PORT_BASE` (8730) for up to
 `AUTOMATION_PORT_SPAN` (200) ports, so two gated IDEs get different ones. Always read `port` from
 the discovery file. If all 200 fail, `Start` raises
-`gllIdeAutomation: no free loopback port in range` — and the starter swallows it, so the symptom
+`gllAutomationServer: no free loopback port in range` — and the starter swallows it, so the symptom
 is simply no discovery file.
 
-### `NoForm` / `NoComp` / `NoProp`
+### `NoForm` / `NoComp` / `Ambiguous` / `NoProp`
 
 - `NoForm` — send `tree` with no `form` to list what is actually open. Many IDE windows exist but
   are not visible until first used.
-- `NoComp` — the component is not *owned* by that form. Send `tree` with the form name to see the
-  owned components.
+- `NoComp` — nothing of that name is reachable from that form. Send `tree` with the form name and
+  `deep:true` to see what is, including frame and docked controls and the synthetic names of
+  unnamed ones.
+- `Ambiguous` — several components match the name; `error.data.candidates` lists a path to each.
+  Send one of those paths instead.
 - `NoProp` — the property is not published. This is the usual wall; see the next entry.
 
 ### `get` cannot read the debugger panes — use `tree_text`
@@ -561,9 +451,10 @@ an empty clipboard. Click the row first. `read_pane.py` primes the clipboard wit
 
 ### The `app_*` tools cannot see an add-in's frame
 
-**They walk form ownership.** `tree` enumerates `Screen.Forms`, and with a `form` it enumerates
-that form's *owned* components one level deep. An add-in that parents a frame into an IDE window
-without that window owning it is not reachable this way, and no `form` name will find it.
+**Before protocol 0.11 they walked form ownership only**, so an add-in that parents a frame into
+an IDE window without that window owning it was unreachable. Since 0.11 a component `name` also
+reaches frame-owned and docked (parented-only) controls, and `tree` with `deep:true` lists them;
+the forms themselves are still found through `Screen.Forms`.
 
 To establish that an add-in BPL is loaded at all, **look at the process module list** — enumerate
 the modules of the `bds.exe` process and look for the BPL by name. That is a fact about the
@@ -592,20 +483,19 @@ if the cursor will not stay where it was put, so a human on the mouse does not r
 
 ## 7. Dependencies
 
-Everything ships with Delphi. Clone and build; there is nothing to acquire.
+Everything but `gllAutomationServer` ships with Delphi.
 
 | `requires` | Needed for |
 |---|---|
 | `rtl` | — |
-| `vcl` | `Screen.Forms`, published-property access, `TAction` |
-| `vclimg` | `Vcl.Imaging.pngimage` — the `screenshot` command |
-| `dbrtl` | `Data.DB` — the `dataset` / `dataset_op` / `field_*` commands |
-| `IndySystem`, `IndyCore` | `TIdTCPServer` — the loopback listener |
+| `vcl` | `Vcl.Forms`, `Vcl.Controls`, `Vcl.Menus` — `tree_text`'s target and the `ide_menu*` commands |
 | `designide` | `ToolsAPI` — the `ide_*` and `debug_*` commands in `gllIdeAutomation.IdeCommands` |
+| `gllAutomationServer` | `TAutomationServer`, `EAutoError` — the server itself (`D:\gllAutomationServer`) |
 
-The dataset commands are inherited from the server's origin driving database applications. They
-are of little practical use against the IDE itself, but they cost nothing and they are why
-`dbrtl` is required.
+`vclimg`, `dbrtl`, `IndySystem` and `IndyCore` are no longer required here: the server package
+requires them (for `screenshot`, the dataset commands and the Indy loopback listener), and they
+reach this package through it. `gllAutomationServer` is ours and must be built before this
+package; everything else ships with Delphi.
 
 ---
 
@@ -618,12 +508,12 @@ reading that file. There is no remote surface.
 **The token file's permissions are therefore the real control, and the default ACL does not
 provide them.** `C:\ProgramData` grants `BUILTIN\Users` read, and that is inherited all the way
 down, so a discovery directory created with an ordinary `CreateDirectory` hands the token to every
-account on the machine. Since 1.1.0 the directory is created with an explicit **protected** DACL —
-inheritance broken — naming only `SYSTEM`, `BUILTIN\Administrators` and the account the host
+account on the machine. The server (in `gllAutomationServer`; here since 1.1.0) therefore
+creates the directory with an explicit **protected** DACL — inheritance broken — naming only `SYSTEM`, `BUILTIN\Administrators` and the account the host
 process runs as.
 
 Two limits worth knowing. An **existing** directory is left exactly as it is: it is shared with the
-rest of the GITLAK tooling and its permissions are the estate's to set, not this package's to
+rest of the GITLAK tooling and its permissions are the estate's to set, not the server's to
 rewrite underneath whatever else is using it — so the hardening applies from first creation, and
 after anyone deletes the folder. And if the restricted create fails the directory is still created
 with the inherited ACL, because failing to advertise is worse; that fallback announces itself
@@ -641,6 +531,6 @@ IDE deserves the suspicion you would apply to a debugger. It is off by default f
 and the package is inert unless the gate is set — so leaving it installed costs nothing, and
 whether to set the variable permanently is the decision to take deliberately.
 
-The server unit's own header states it plainly: **it must not be started in a shipped
-application.** That is a conditional-compilation and opt-in discipline on the consumer's side,
-not something the package can enforce.
+The server starts only when a host explicitly opts in; that is the consumer's discipline, not
+something the server package can enforce (see *Gating* in `D:\gllAutomationServer\Help.md`). In
+the IDE the opt-in is `GITLAK_IDE_AUTOMATION=1`.

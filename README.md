@@ -155,11 +155,11 @@ Cross-check with `--name`.
 
 ## Dependencies
 
-Everything ships with Delphi — clone and build, nothing to acquire:
-
-`rtl`, `vcl`, `vclimg` (screenshots), `dbrtl` (the dataset commands), `IndySystem` + `IndyCore`
-(the listener), and `designide` for the ToolsAPI commands in `gllIdeAutomation.IdeCommands` (added
-2026-09-29; before then nothing here touched the ToolsAPI). The server unit itself still does not.
+`rtl`, `vcl`, `designide` (the ToolsAPI commands in `gllIdeAutomation.IdeCommands`), and
+**[gllAutomationServer](https://github.com/ijbranch/gllAutomationServer)** — the automation server
+itself, a runtime package of its own since 2026-10-13. Build that package first (all four modes);
+this one `requires` it, and the IDE loads its BPL from the shared `Bpl` folder. Everything the server
+needs (`vclimg`, `dbrtl`, `IndySystem`, `IndyCore`) ships with Delphi.
 
 ## Why the discovery path says GITLAK
 
@@ -169,15 +169,15 @@ application agree regardless of either process's `%TEMP%`. The name is historica
 meaningful — changing it would break every existing client for no functional gain, so it stays.
 It holds one small JSON file per running instance and nothing else.
 
-## Contributing
+## Working on it
 
-Issues and patches welcome. Two things worth knowing first:
+This repository is private (since 2026-10-13). Things worth knowing before changing it:
 
-- `src/gllIdeAutomation.Server.pas` is **vendored** from the library described below, so a fix
-  here ideally wants to go upstream too. Nothing keeps the two copies in step automatically.
+- A change to the server itself — a built-in command, addressing, the transport — belongs in
+  **gllAutomationServer**, not here. This package holds only what the IDE alone needs: the gate,
+  the ToolsAPI commands, and `tree_text`.
 - Keep it compiling on **10.3 Rio**. The inline variables set that floor already; please don't
-  raise it without a good reason. Only 13 Florence is built here, so a report that it does or does
-  not compile on an older IDE is genuinely useful — more so than most patches.
+  raise it without a good reason. Only 13 Florence is built here.
 - **Rebuild with the package unticked or the IDE closed.** An IDE with it installed holds both the
   `.bpl` and the `.dcp` open, so a build cannot replace them and stops with two
   `F2039 Could not create output file` errors — from the command line as much as from inside the
@@ -186,19 +186,14 @@ Issues and patches welcome. Two things worth knowing first:
 
 ## Provenance
 
-The server unit is vendored from GITLAK Software's internal library, where it was written to
-drive VCL applications for unattended UI testing. Most of it needed no changes: the IDE is a VCL
-application, and the unit only ever knew about `Screen.Forms` and published properties.
-
-Not *no* changes, though, and the copy is not a mirror. Where the host differs the fork differs
-with it — most visibly, the upstream version disables any idle timer it finds on every command, to
-stop an application under test logging itself out; here that would only reach into a third-party
-IDE plug-in and switch something off permanently, so it is retained but not called. Every
-fork-specific change is marked `FORK` in the source, and `Help.md` §4 lists them.
-
-It is renamed here (`gllIdeAutomation.Server`) rather than copied verbatim, because a Delphi unit
-may exist in only one loaded package — a copy under the original name could not load alongside
-the library it came from.
+The server was written to drive VCL applications for unattended UI testing; the IDE is a VCL
+application, so it serves the IDE unchanged. Until 2026-10-13 this repository carried a renamed
+copy of it (`gllIdeAutomation.Server`), hand-synced with the original — they drifted 283 lines apart
+once, and every change had to be made twice. The server now has a package of its own, which both
+hosts use. What used to differ is chosen by the host instead: this package starts it with
+`ADisableIdleTimers = False` (an application under test needs its idle timers stopped so it cannot
+log itself out; here that would switch off a third-party plug-in's timer), and adds `tree_text`
+with `RegisterCommand`, as it always added the ToolsAPI commands.
 
 ## Generated API documentation
 
@@ -217,8 +212,9 @@ or use the package — only to regenerate those pages.
 ```
 gllIdeAutomation.dpk            the design-time package — the real project
 gllIdeAutomation.dproj          13 Florence's MSBuild wrapper, and the version info
-src/gllIdeAutomation.Server     the automation server (vendored)
 src/gllIdeAutomation.Starter    ~30 lines: the gate, and the call to Start
+src/gllIdeAutomation.IdeCommands  the ToolsAPI commands and tree_text, registered on the server
+src/gllIdeAutomation.TreeText   reads what a virtual tree displays (the debugger panes)
 tools/                          launcher, clicker, pane reader
 ```
 

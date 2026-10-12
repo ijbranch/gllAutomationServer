@@ -3,6 +3,8 @@
 How to drive the Delphi IDE from outside it. For things that have gone wrong, see
 [HELP.md](HELP.md).
 
+> Superseded legacy document: the current pair is `Help.md` and `Users Guide.md` at the repository root. Since 2026-10-13 the server is the separate runtime package `gllAutomationServer` (`D:\gllAutomationServer\Help.md`).
+
 ---
 
 ## The idea
@@ -10,7 +12,7 @@ How to drive the Delphi IDE from outside it. For things that have gone wrong, se
 The Delphi IDE is a VCL application. Its windows are `TForm` descendants owned by components with
 names, exposing published properties, wired to `TAction`s and `TMenuItem`s — the same model your
 own applications use. This package starts a small server inside the IDE that exposes that model
-over a loopback socket.
+over a loopback socket; the server itself is the shared `gllAutomationServer` runtime package.
 
 So instead of synthesising keystrokes and reading pixels, you ask the IDE what it has and tell it
 what to do:
@@ -29,7 +31,8 @@ GExperts, TestInsight, whatever you have — appear alongside the IDE's own.
 
 ## Getting it running
 
-**1. Build** for the bitness of your IDE. `bin64\bds.exe` needs the Win64 build, `bin\bds.exe`
+**1. Build** `gllAutomationServer` first (all four modes); this package requires it. Then build
+this package for the bitness of your IDE. `bin64\bds.exe` needs the Win64 build, `bin\bds.exe`
 needs Win32. A design-time package must match the IDE loading it, and the wrong one simply never
 loads.
 
@@ -84,14 +87,15 @@ Loopback TCP, one JSON object per line, one line back. Every request carries the
 ```
 
 **Addressing.** `form` is a form's `Name`, or `"main"`, or `"active"`; omitted means `main`.
-`name` is a component **owned** by that form — ownership, not parenting. Omit `name` to address
+`name` is a component owned by that form or, since protocol 0.11, reachable from it (frame and
+docked controls, a dotted path, or a synthetic name such as `@TButton#2`). Omit `name` to address
 the form itself.
 
 ### Commands
 
 | cmd | fields | does |
 |---|---|---|
-| `ping` / `info` | — | `{ app, pid, version, package, exe, mainForm, server }` — `version` is the host exe's, `package` is this package's own |
+| `ping` / `info` | — | `{ app, pid, version, package, exe, mainForm, server }` — `version` is the host exe's, `package` is the `gllAutomationServer` BPL's |
 | `tree` | `form?` | no form: every open form. With a form: its components and their key published properties |
 | `get` | `form?`, `name?`, `prop` | reads any published property, typed |
 | `set` | `form?`, `name?`, `prop`, `value` | writes a published property and reads it back |
@@ -110,8 +114,8 @@ property you care about. A blocking wait on the server would tie up the connecti
 hold the VCL thread it marshals onto.
 
 The dataset commands are inherited from the server's origin driving database applications. They
-are of little use against the IDE itself, but they cost nothing and they are why `dbrtl` is a
-dependency.
+are of little use against the IDE itself, but they cost nothing and they are why the
+`gllAutomationServer` package requires `dbrtl`.
 
 Failures return a stable `code`: `NoForm`, `NoComp`, `NoProp`, `NoHandler`, `Unauthorised`.
 

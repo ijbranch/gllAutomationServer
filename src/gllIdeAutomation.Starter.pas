@@ -32,7 +32,7 @@ implementation
 
 uses
   System.SysUtils,
-  gllIdeAutomation.Server, gllIdeAutomation.IdeCommands;
+  gllAutomationServer, gllIdeAutomation.IdeCommands;
 
 const
   ///<summary> Environment variable that must be '1' before the server is started. </summary>
@@ -56,7 +56,9 @@ initialization
   try
     if ( AutomationRequested ) then
     begin
-      TAutomationServer.Start( APP_NAME );
+      // False: leave the IDE's own timers alone - an application can log itself out mid-test and
+      // needs them disabled; the IDE's belong to its plug-ins and are not ours to stop.
+      TAutomationServer.Start( APP_NAME, False );
       RegisterIdeCommands;
     end;
   except

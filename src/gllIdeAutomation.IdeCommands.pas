@@ -4,9 +4,9 @@
   Copyright (c) 2016-2026 Ian Branch (GITLAK Software)
   Licensed under the MIT Licence - see LICENSE at the root of this repository.
 
-  The commands here are the ones that need the ToolsAPI, kept out of gllIdeAutomation.Server so
-  that unit stays a VCL-only copy of GITLAKLib's gllAutomationServer. They register themselves
-  through TAutomationServer.RegisterCommand.
+  The commands here are the ones only the IDE needs - the ToolsAPI set, and tree_text for the
+  debugger panes - kept out of the shared gllAutomationServer package so that stays VCL-only and
+  the same for every host. They register themselves through TAutomationServer.RegisterCommand.
 
   PROVENANCE: the command set was chosen after reading GxInspect (GExperts' inspection server,
   ^/GxInspect/trunk), whose README documents what each of these IDE operations really does when
@@ -41,9 +41,9 @@ uses
   System.SysUtils, System.Classes, System.JSON, System.TypInfo, System.SyncObjs, System.Diagnostics,
   System.Generics.Collections,
   Winapi.Windows,
-  Vcl.Forms, Vcl.Menus,
+  Vcl.Forms, Vcl.Menus, Vcl.Controls,
   ToolsAPI,
-  gllIdeAutomation.Server;
+  gllAutomationServer, gllIdeAutomation.TreeText;
 
 const
   /// <summary>How long <c>ide_quit</c> and <c>ide_menu_click</c> wait before acting, so their answer is on the wire first.</summary>
@@ -71,8 +71,8 @@ const
   WAIT_END_STATES     = STOPPED_STATES + [ psTerminated, psNoProcess ];
 
   /// <summary>Every command this unit registers, so that unregistering cannot miss one.</summary>
-  COMMAND_NAMES: array[ 0..20 ] of string = (
-    'ide_modified', 'ide_quit', 'ide_menu', 'ide_menu_click',
+  COMMAND_NAMES: array[ 0..21 ] of string = (
+    'tree_text', 'ide_modified', 'ide_quit', 'ide_menu', 'ide_menu_click',
     'debug_state', 'debug_attach', 'debug_detach', 'debug_pause', 'debug_run', 'debug_step',
     'debug_run_to', 'debug_terminate', 'debug_threads', 'debug_set_thread', 'debug_stack',
     'debug_registers', 'debug_memory', 'debug_eval', 'debug_breakpoints', 'debug_breakpoint_set',
@@ -1687,11 +1687,93 @@ begin
 
 end;
 
+{ ── tree_text ───────────────────────────────────────────────────────────── }
+
+/// <summary>
+///   <c>tree_text</c> command: every displayed row of a virtual tree - the IDE's Local Variables,
+///   Watch and Call Stack panes, whose text <c>get</c> cannot reach because a virtual tree publishes
+///   none. A built-in of the server until 2026-10-13, when the server became one shared package; it
+///   addresses its form and control through the server's own resolvers, so nothing changed for callers.
+/// </summary>
+/// <param name="AReq">The request object (<c>form?</c>, <c>name</c>, <c>max?</c> - the row limit).</param>
+/// <returns><c>{ name, class, columns, rows:[ { level, cells } ], rowsRead, rootCount, complete, notes }</c>.</returns>
+/// <exception cref="EAutoError">
+///   <c>NoForm</c> / <c>NoComp</c> when the target is not found; <c>BadRequest</c> when <c>name</c> is missing or
+///   names a non-control; otherwise the reader's own refusal code - <c>NotVirtualTree</c>, <c>NoWindow</c>,
+///   <c>NotOnScreen</c>, <c>NoGetText</c> or <c>SignatureMismatch</c>.
+/// </exception>
+function CmdTreeText( AReq: TJSONObject ): TJSONValue;
+begin
+
+  if AReq.GetValue<string>( 'name', '' ) = '' then
+    raise EAutoError.CreateCode( 'BadRequest', 'tree_text needs "name": the tree control on the form' );
+
+  var oForm := TAutomationServer.ResolveForm( AReq );
+  var oComp := TAutomationServer.ResolveComponent( AReq, oForm );
+  if oComp is not TControl then
+    raise EAutoError.CreateCode( 'BadRequest', Format( '%s is a %s, not a control', [ oComp.Name, oComp.ClassName ] ) );
+
+  //  TryGetValue alone is wrong here. It sets its out parameter to Default( T ) when the key is
+  //  MISSING, so a request without "max" used to read ONE row (0, clamped up to 1) rather than the
+  //  default. The MCP tool always sends "max", which is why it went unnoticed.
+  var iMax: Integer;
+  if not AReq.TryGetValue<Integer>( 'max', iMax ) then
+    iMax := TREE_TEXT_DEFAULT_MAX_ROWS;
+
+  var rRead: TTreeTextResult;
+  try
+    rRead := ReadTreeText( TControl( oComp ), iMax );
+  except
+    on E: ETreeTextRefused do
+      raise EAutoError.CreateCode( E.Code, E.Message );
+  end;
+
+  var oRes := TJSONObject.Create;
+  try
+    oRes.AddPair( 'name', oComp.Name );
+    oRes.AddPair( 'class', oComp.ClassName );
+
+    var oColumns := TJSONArray.Create;
+    oRes.AddPair( 'columns', oColumns );
+    for var sColumn in rRead.Columns do
+      oColumns.Add( sColumn );
+
+    var oRows := TJSONArray.Create;
+    oRes.AddPair( 'rows', oRows );
+    for var rRow in rRead.Rows do
+    begin
+      var oRow := TJSONObject.Create;
+      oRows.AddElement( oRow );
+      oRow.AddPair( 'level', TJSONNumber.Create( rRow.Level ) );
+      var oCells := TJSONArray.Create;
+      oRow.AddPair( 'cells', oCells );
+      for var sCell in rRow.Cells do
+        oCells.Add( sCell );
+    end;
+
+    oRes.AddPair( 'rowsRead', TJSONNumber.Create( Length( rRead.Rows ) ) );
+    oRes.AddPair( 'rootCount', TJSONNumber.Create( rRead.RootCount ) );
+    oRes.AddPair( 'complete', TJSONBool.Create( rRead.Complete ) );
+
+    var oNotes := TJSONArray.Create;
+    oRes.AddPair( 'notes', oNotes );
+    for var sNote in rRead.Notes do
+      oNotes.Add( sNote );
+
+    Result := oRes;
+  except
+    oRes.Free;
+    raise;
+  end;
+
+end;
+
 { ── Registration ────────────────────────────────────────────────────────── }
 
 procedure RegisterIdeCommands;
 begin
 
+  TAutomationServer.RegisterCommand( 'tree_text', CmdTreeText );
   TAutomationServer.RegisterCommand( 'ide_modified', CmdIdeModified );
   TAutomationServer.RegisterCommand( 'ide_quit', CmdIdeQuit );
   TAutomationServer.RegisterCommand( 'ide_menu', CmdIdeMenu );

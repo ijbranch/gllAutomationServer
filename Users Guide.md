@@ -10,8 +10,13 @@ same model your own applications use. This package starts a small server inside 
 exposes that model over a loopback socket, so instead of synthesising keystrokes and reading
 pixels you ask the IDE what it has and tell it what to do.
 
-It knows nothing about the IDE specifically: it walks `Screen.Forms`, so plug-in windows appear
-alongside the IDE's own without the server having heard of them.
+The server is not part of this package: it is the shared runtime package `gllAutomationServer`
+(`D:\gllAutomationServer`, documented in its `Help.md`), the same one any other GITLAK host uses.
+This package adds the gate that starts it inside the IDE and 22 commands only the IDE needs:
+`tree_text` and the ToolsAPI set.
+
+The server knows nothing about the IDE specifically: it walks `Screen.Forms`, so plug-in windows
+appear alongside the IDE's own without the server having heard of them.
 
 ---
 
@@ -21,6 +26,9 @@ Open `gllIdeAutomation.dproj` on Delphi 13. (On an older IDE, open `gllIdeAutoma
 instead and let that IDE write its own `.dproj` beside it — the `.dpk` is the real project and is
 version-agnostic; the `.dproj` here is the MSBuild wrapper Delphi 13 generated. Do not commit the
 one yours produces.)
+
+**Build `gllAutomationServer` first**, in all four modes: this package `requires` it, and Indy,
+`vclimg` and `dbrtl` reach this package through it.
 
 Build **all four modes** — Win32 + Win64 × Debug + Release. It is a package, and a package is only
 finished when all four are built; the `.dproj` declares both platforms and both configurations.
@@ -54,6 +62,9 @@ Do this from **`bin64\bds.exe`**. Registration is per IDE bitness: the 64-bit ID
 `Known Packages x64`, the 32-bit IDE reads `Known Packages`. Installing a Win64 BPL from the
 32-bit IDE writes it into a key where it can never load, and the symptom is not a package error
 but `Error Reading Form: Class TXxx not found` later, in an unrelated form.
+
+`gllAutomationServer` is a runtime package and is not installed itself; the IDE loads it with this
+one, from the shared `Bpl\<Platform>` folder on `PATH`.
 
 Installing starts nothing. The package is inert until you set the gate.
 
@@ -139,11 +150,12 @@ $r.ReadLine() | ConvertFrom-Json
 ```
 
 `ping` answers `{ app, pid, version, package, exe, mainForm, server }`, where `server` is the
-protocol version (`0.9` since the ToolsAPI commands; `0.8` before). The two version fields are **not** the same thing and the distinction is
+protocol version (`0.11`). The two version fields are **not** the same thing and the distinction is
 the point: `version` is the **host's** — inside the IDE that is `bds.exe`'s, something like
-`37.0.60952.8797` — while `package` is this package's own BPL version, which is how you tell which
-build of `gllIdeAutomation` the IDE has actually loaded. If that returns, everything from here is
-detail.
+`37.0.60952.8797` — while `package` is the version of the BPL holding the server, which is now
+the shared `gllAutomationServer` package (`1.0.0.0`), not this one. To tell which build of
+`gllIdeAutomation` the IDE has loaded, read its BPL's file version (§14). If that returns,
+everything from here is detail.
 
 From Python, the whole client is ten lines — `tools\read_pane.py` carries this one:
 
@@ -177,13 +189,16 @@ Name a form and you get its owned components one level deep:
 { "token":"…", "id":2, "cmd":"tree", "form":"LocalVarsWindow" }
 ```
 
-Each component comes back as `{ name, class, props }`, where `props` holds only the ten
+Each component comes back as `{ name, class, path?, props }`, where `props` holds only the ten
 properties `tree` bothers with — `Caption`, `Text`, `Visible`, `Enabled`, `Checked`, `ItemIndex`,
 `Left`, `Top`, `Width`, `Height` — and only those the component actually publishes. Anything else
 needs an explicit `get`.
 
-**Ownership, not parenting.** `tree` lists what the form *owns*. A control parented into a form by
-something else is not in the list and cannot be addressed by name.
+**Owned by default, everything with `deep:true`.** Since protocol 0.11, `"deep":true` adds what is
+reachable but not owned by the form: a frame's controls, and controls docked into the form by
+something else. A `name` may be a dotted path (`fraA.edtTown`), and an unnamed component is listed
+under a synthetic name (`@TButton#2`) that resolves back to it. A name that matches several
+components is refused as `Ambiguous`, with the candidates' paths in `error.data.candidates`.
 
 ---
 
@@ -211,9 +226,13 @@ trusting it rather than treating a missing one as `false`.
 `form` may be a form's `Name`, `"main"` or `"active"`; omit it and you get the main form. Omit
 `name` and you address the form itself, which is how you read a form's `Caption` or `Visible`.
 
-Only **published** properties are reachable. `NoProp` means the property is not published, not
-that you spelled it wrong — and the failure carries `error.data.properties`, the ones the object
-*does* publish with their live values, so a near-miss corrects itself without another round-trip.
+Only **published** properties are reachable, with two exceptions since 0.11: an unpublished
+`Text` / `Caption` on a control falls back to its window text, and a `TStrings` reads and writes as
+its text (`Lines`, `Lines.Count`). `prop` may also be a dotted path through object properties
+(`Font.Size`). `NoProp` means the property is not published, not that you spelled it wrong — and
+the failure carries `error.data.properties`, the ones the object *does* publish with their live
+values, so a near-miss corrects itself without another round-trip. The full rules are in
+`D:\gllAutomationServer\Help.md`.
 
 ---
 
@@ -252,7 +271,7 @@ real keyboard, without the IDE needing to be in the foreground:
 
 Omit `name` to type into the form's focused control. `text` goes first, then `keys`; a chord is one
 key with optional `Ctrl+` / `Shift+` / `Alt+`, chords separated by spaces or commas (the full key
-list is in `Help.md`). The control is focused first unless `focus:false`. The reply comes once every
+list is in `D:\gllAutomationServer\Help.md`). The control is focused first unless `focus:false`. The reply comes once every
 stroke has been delivered. If a keystroke opens a modal dialog the sequence stops there —
 `completed:false`, `stoppedReason:"modal"` — rather than typing into the window behind it; answer the
 dialog with `dialogs` (§9).
@@ -416,8 +435,9 @@ physical. Two further points, both learned by getting them wrong:
 
 ## 13. The dataset commands
 
-`dataset`, `dataset_op`, `field_get` and `field_set` are inherited from the server's origin —
-driving database applications under test — and they are why `dbrtl` is a `requires`. Against the
+`dataset`, `dataset_op`, `field_get` and `field_set` come from the server's origin — driving
+database applications under test — and they are why the `gllAutomationServer` package requires
+`dbrtl`. Against the
 IDE itself they have little use, but they cost nothing and they work against any VCL application
 this server is hosted in.
 
@@ -454,18 +474,19 @@ genuine fault worth reporting rather than something you did.
 
 **The IDE is not modified behind your back.** This package reads the IDE's component model and
 does what you ask; it does not adjust the IDE to suit itself. In particular it does not disable
-IDE or plug-in timers, which the upstream version of this server does when driving an application
-that might log itself out mid-test.
+IDE or plug-in timers: the server does that by default, for an application that might log itself
+out mid-test, and the starter turns it off by calling `Start( APP_NAME, False )`.
 
 **Know which thread a command runs on.** `dialogs` and `screenshot` run on the worker thread;
 everything else is marshalled to the main VCL thread. That is precisely why those two still work
 while a modal loop is blocking and the others do not. `keys` is a hybrid: it marshals only its start
-onto the VCL thread, then waits on the worker thread while the keystrokes are delivered.
+onto the VCL thread, then waits on the worker thread while the keystrokes are delivered. Of this
+package's own commands, `debug_run`, `debug_step` and `debug_run_to` run on the worker thread;
+`tree_text` and the rest run on the main thread.
 
-**The `app_*` tools walk form ownership.** They cannot reach an add-in's frame that is parented
-into an IDE window without being owned by it — no `form` name will find it, because `tree`
-enumerates `Screen.Forms` and each form's *owned* components. To establish that an add-in BPL is
-loaded at all, **enumerate the modules of the `bds.exe` process** and look for the BPL by name.
+**An add-in's frame is reachable since protocol 0.11.** A frame parented into an IDE window without
+being owned by it used to be invisible to the `app_*` tools; now `tree` with `deep:true` lists it
+and a `name` reaches its controls. To establish that an add-in BPL is loaded at all, **enumerate the modules of the `bds.exe` process** and look for the BPL by name.
 That is a fact about the process rather than about the VCL ownership graph, so it answers a
 question the automation server cannot.
 
@@ -484,9 +505,8 @@ registration is per-version.
 
 **Leaving the package installed costs nothing** — it is inert unless the gate is set. The real
 decision is whether to set the variable permanently: a reasonable trade on a development machine,
-a poor one on a shared box. The server unit's own header says it outright — it must never be
-started in a shipped application, and that is a discipline on the consumer's side, not something
-the package can enforce.
+a poor one on a shared box. The server starts only when a host opts in; that is a discipline on
+the consumer's side, not something the server package can enforce.
 
 ---
 
@@ -535,6 +555,7 @@ Poll `debug_state` until `current.location` appears after starting the program. 
 
 | You want | Read |
 |---|---|
-| a command's exact fields, or an error code | [Help.md](Help.md) |
+| a registered command's (`tree_text`, `ide_*`, `debug_*`) exact fields, or its error codes | [Help.md](Help.md) |
+| a built-in command's fields, addressing, the protocol or its error codes | `D:\gllAutomationServer\Help.md` ([GitHub](https://github.com/ijbranch/gllAutomationServer)) |
 | why the package exists and what the tools do | [README.md](README.md) |
 | what changed and when | [CHANGELOG.md](CHANGELOG.md) |

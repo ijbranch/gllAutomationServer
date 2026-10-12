@@ -11,8 +11,9 @@
   the event's signature against RTTI before hooking it, per-row node levels, header captions, and
   a row limit.
 
-  FORK: this unit exists only in gllIdeAutomation. GITLAKLib's gllAutomationServer has no use for
-  it - no DBiWorkflow form carries a virtual tree - so there is nothing to carry back.
+  This unit exists only in gllIdeAutomation, which registers the tree_text command on the shared
+  gllAutomationServer. The server itself has no use for it - no DBiWorkflow form carries a virtual
+  tree - so it stays here.
 *)
 /// <summary>
 ///   Reads the text a <c>TVirtualStringTree</c> displays, from outside the module that owns it. Such

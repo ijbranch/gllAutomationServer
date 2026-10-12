@@ -3,6 +3,8 @@
 Short answers to the things that go wrong. For how to *use* it, see
 [Users Guide.md](Users%20Guide.md).
 
+> Superseded legacy document: the current pair is `Help.md` and `Users Guide.md` at the repository root. Since 2026-10-13 the server is the separate runtime package `gllAutomationServer` (`D:\gllAutomationServer\Help.md`).
+
 ## The IDE does not appear in the discovery directory
 
 The server is not running. Work down this list:
@@ -54,8 +56,8 @@ per-session: it changes each time the IDE restarts, so a cached one goes stale.
 
 - `NoForm` — the form name is wrong, or the form does not exist yet. Send `tree` with no `form`
   to list what is actually open. Many IDE windows exist but are not visible until first used.
-- `NoComp` — the component is not *owned* by that form. Ownership is not the same as parenting;
-  send `tree` with the form name to see the owned components.
+- `NoComp` — nothing of that name is reachable from that form; send `tree` with the form name
+  and `deep:true` to see what is.
 - `NoProp` — the property is not published. This is the usual wall: `TVirtualStringTree` cell
   text, tree selection and grid contents are not published and cannot be read this way.
 
