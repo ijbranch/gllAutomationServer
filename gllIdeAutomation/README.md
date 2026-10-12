@@ -171,7 +171,8 @@ It holds one small JSON file per running instance and nothing else.
 
 ## Working on it
 
-This repository is private (since 2026-10-13). Things worth knowing before changing it:
+This package lives in the private gllAutomationServer repository (folder `gllIdeAutomation\`)
+since 2026-10-13. Things worth knowing before changing it:
 
 - A change to the server itself — a built-in command, addressing, the transport — belongs in
   **gllAutomationServer**, not here. This package holds only what the IDE alone needs: the gate,
@@ -187,7 +188,7 @@ This repository is private (since 2026-10-13). Things worth knowing before chang
 ## Provenance
 
 The server was written to drive VCL applications for unattended UI testing; the IDE is a VCL
-application, so it serves the IDE unchanged. Until 2026-10-13 this repository carried a renamed
+application, so it serves the IDE unchanged. Until 2026-10-13 this package's own repository carried a renamed
 copy of it (`gllIdeAutomation.Server`), hand-synced with the original — they drifted 283 lines apart
 once, and every change had to be made twice. The server now has a package of its own, which both
 hosts use. What used to differ is chosen by the host instead: this package starts it with
@@ -197,7 +198,7 @@ with `RegisterCommand`, as it always added the ToolsAPI commands.
 
 ## Generated API documentation
 
-The current documents are the two at the repository root, linked at the top of this file. The pair
+The current documents are the two in this package's folder, linked at the top of this file. The pair
 under `docs/` — [docs/Users Guide.md](docs/Users%20Guide.md) and [docs/HELP.md](docs/HELP.md) —
 **predates the estate documentation standard and is superseded**; it is kept only because it was
 published under those names. Read the root pair.

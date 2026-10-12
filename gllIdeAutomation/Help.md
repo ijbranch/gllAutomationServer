@@ -20,7 +20,7 @@ For how to get it running and drive it, read
 rationale and the tooling are in [README.md](README.md).
 
 > `docs/HELP.md` and `docs/Users Guide.md` predate the estate documentation standard and are
-> still present. This pair at the repository root is the conforming one.
+> still present. This pair in the package folder is the conforming one.
 
 ---
 
@@ -241,7 +241,7 @@ nothing to merge from and no divergence to justify.
 - **The server is not part of this package.** It is the shared runtime package
   `gllAutomationServer` (`D:\gllAutomationServer`,
   [GitHub](https://github.com/ijbranch/gllAutomationServer)), which this package `requires`, so the
-  IDE loads the same server unit as every other host. Until 2026-10-13 this repository carried its
+  IDE loads the same server unit as every other host. Until 2026-10-13 this package's own repository carried its
   own copy; that copy is gone, and with it any need to keep two copies in step.
 - **What is here is what only the IDE needs:** the gate (`gllIdeAutomation.Starter`), `tree_text`
   (the reader in `gllIdeAutomation.TreeText`, the `CmdTreeText` handler in

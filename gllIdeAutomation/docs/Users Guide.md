@@ -3,7 +3,7 @@
 How to drive the Delphi IDE from outside it. For things that have gone wrong, see
 [HELP.md](HELP.md).
 
-> Superseded legacy document: the current pair is `Help.md` and `Users Guide.md` at the repository root. Since 2026-10-13 the server is the separate runtime package `gllAutomationServer` (`D:\gllAutomationServer\Help.md`).
+> Superseded legacy document: the current pair is `Help.md` and `Users Guide.md` in the package folder (`gllIdeAutomation\`). Since 2026-10-13 the server is the separate runtime package `gllAutomationServer` (`D:\gllAutomationServer\Help.md`).
 
 ---
 

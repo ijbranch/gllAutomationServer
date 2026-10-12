@@ -3,7 +3,7 @@
 Short answers to the things that go wrong. For how to *use* it, see
 [Users Guide.md](Users%20Guide.md).
 
-> Superseded legacy document: the current pair is `Help.md` and `Users Guide.md` at the repository root. Since 2026-10-13 the server is the separate runtime package `gllAutomationServer` (`D:\gllAutomationServer\Help.md`).
+> Superseded legacy document: the current pair is `Help.md` and `Users Guide.md` in the package folder (`gllIdeAutomation\`). Since 2026-10-13 the server is the separate runtime package `gllAutomationServer` (`D:\gllAutomationServer\Help.md`).
 
 ## The IDE does not appear in the discovery directory
 
