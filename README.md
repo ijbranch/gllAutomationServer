@@ -55,8 +55,21 @@ DCUs, so build the package first.
 ## Who uses it
 
 - The 27 applications of GITLAK Software's DBiWorkflow suite, started on `/AUTOMATION`.
-- [gllIdeAutomation](https://github.com/ijbranch/gllIdeAutomation), which runs it inside the Delphi
-  IDE and adds the IDE's own commands (ToolsAPI, debugger panes) with `RegisterCommand`.
+- **gllIdeAutomation**, in [`gllIdeAutomation\`](gllIdeAutomation/README.md) in this repository: a
+  design-time package that runs the server inside the Delphi IDE and adds the IDE's own commands
+  (ToolsAPI, debugger panes) with `RegisterCommand`. It has its own README, Help, Users Guide and
+  CHANGELOG there.
+
+## Repository layout
+
+```
+gllAutomationServer.dpk / .dproj / .pas   the server - a runtime package, linked by applications
+Tests\                                    its DUnitX suite
+gllIdeAutomation\                         the IDE host - a design-time package that requires the server
+```
+
+The two were separate repositories until 2026-10-13; gllIdeAutomation's history came across in a
+subtree merge, and its old tags are `gllIdeAutomation-v1.0.0`, `-v1.0.1` and `-v1.2.0`.
 
 ## Licence
 

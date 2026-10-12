@@ -1,7 +1,15 @@
 # gllAutomationServer — project notes
 
-The in-app automation server (`gllAutomationServer.pas`), one runtime-only package. Reference:
-`Help.md`. History: `CHANGELOG.md`.
+Two packages in one repository (merged 2026-10-13):
+
+- **`gllAutomationServer`** (root) — the in-app automation server, runtime-only. Reference `Help.md`,
+  history `CHANGELOG.md`.
+- **`gllIdeAutomation\`** — the design-time package that hosts the server inside the Delphi IDE and
+  registers the IDE-only commands (`ide_*`, `debug_*`, `tree_text`). Its own `README.md`, `Help.md`,
+  `Users Guide.md` and `CHANGELOG.md` are in that folder; its old tags are `gllIdeAutomation-v*`.
+
+Build order: the server package (all four modes), then `gllIdeAutomation\gllIdeAutomation.dproj` (all
+four). A change that crosses the two goes in one commit, with an entry in each CHANGELOG.
 
 ## The one rule: this is the only copy
 
@@ -14,7 +22,7 @@ a registered command (`RegisterCommand` + `ResolveForm` / `ResolveComponent`), n
 - **27 DBiWorkflow apps** link it statically through the library path
   (`D:\gllAutomationServer\37.0\<Platform>\Release`, in `Library\Win32`/`Win64` and `EnvOptions.proj`).
   A change reaches an app only when the app is rebuilt.
-- **gllIdeAutomation** `requires` the package; the IDE loads `gllAutomationServer370.bpl` from the shared
+- **gllIdeAutomation** (in `gllIdeAutomation\`) `requires` the package; the IDE loads `gllAutomationServer370.bpl` from the shared
   `Bpl\<Platform>` folder. **Close the IDE before building Release** (`F2039` otherwise), and restart it to
   pick up a change.
 - **GITLAKMCP**'s `app_*` tools are the client (`src\Tools\GitLAKMCP.Tool.AppAutomation.pas`). A new

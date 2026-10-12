@@ -4,6 +4,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **Moved into the gllAutomationServer repository, folder `gllIdeAutomation\`, with its history** (2026-10-13) - `Help.md`, `CHANGELOG.md`. The package is unchanged - same name, same `.dpk`, same BPL name and output folder, so the installed IDE package needs no re-registration. Old tags are now `gllIdeAutomation-v1.0.0` / `-v1.0.1` / `-v1.2.0` in the new repository, and the links at the foot of this file point there. `ijbranch/gllIdeAutomation` is archived. **Why:** this package `requires` gllAutomationServer, and changes that cross the two belong in one commit.
+
 ### Added
 - **`keys` command: keyboard input through the host's own message loop** (2026-10-13) - `src\gllIdeAutomation.Server.pas`, `Help.md`, `README.md`, `Users Guide.md`, `docs\Users Guide.md`. Types `text`, then sends `keys` chords (`Ctrl+S`, `Tab Enter`, `Shift+F10`), to a windowed control, setting the modifier state per stroke and restoring it after; shortcuts, `KeyPreview`, dialog navigation and `OnKeyDown`/`OnKeyPress`/`OnKeyUp` fire as for a real keyboard, with no global input and no need for the host to be in the foreground. Runs on the worker thread and answers once delivered; a stroke that opens a modal window stops the sequence (`stoppedReason:"modal"`). New codes `BadKeys`, `Busy`, `NotTypable`, `Blocked`. Server version 0.10. Ported in the same change as GITLAKLib's `gllAutomationServer`; the bodies differ only by the documented list (no `DisableIdleTimers` call here; the step marker is registered as `gllIdeAutomation.KeyStep`). **Why:** shortcut-only commands and key-handler logic could not be driven at all; the idea came from reviewing Autopilot for Delphi (no code taken - its licence forbids it). Four modes build clean; exercised live on GITLAKLib's identical body, not yet inside the IDE.
 
@@ -485,6 +488,6 @@ information on the BPL, a `tools/Start-IDE.ps1` hard-coded to one Delphi install
 invisible control characters in a doc comment that stopped the documentation building. Left in
 place rather than moved, because it was already published and genuinely was that code.
 
-[Unreleased]: https://github.com/ijbranch/gllIdeAutomation/compare/v1.0.1...main
-[1.0.1]: https://github.com/ijbranch/gllIdeAutomation/releases/tag/v1.0.1
-[1.0.0]: https://github.com/ijbranch/gllIdeAutomation/releases/tag/v1.0.0
+[Unreleased]: https://github.com/ijbranch/gllAutomationServer/compare/gllIdeAutomation-v1.0.1...main
+[1.0.1]: https://github.com/ijbranch/gllAutomationServer/releases/tag/gllIdeAutomation-v1.0.1
+[1.0.0]: https://github.com/ijbranch/gllAutomationServer/releases/tag/gllIdeAutomation-v1.0.0

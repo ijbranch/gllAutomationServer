@@ -4,6 +4,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **gllIdeAutomation merged into this repository, with its history** (2026-10-13) - `gllIdeAutomation\` (subtree), `README.md`, `Help.md`, `CLAUDE.md`, `gllIdeAutomation\Help.md`, `gllIdeAutomation\CHANGELOG.md`. The IDE host package, which `requires` this one, now lives in `gllIdeAutomation\` beside it: one repository, two packages. Its tags were renamed `gllIdeAutomation-v1.0.0` / `-v1.0.1` / `-v1.2.0` so that `v1.0.0` stays free for this package, and its CHANGELOG links point here. The old `ijbranch/gllIdeAutomation` repository is archived with a pointer to this one. The installed BPL's name and folder are unchanged, so the IDE needs no re-registration. **Why:** a change that crossed the two - protocol 0.11 moving `tree_text` onto the new `ResolveForm` / `ResolveComponent` - took two commits in two repositories; and the reason for keeping them apart, that gllIdeAutomation was public, went when it became private the same day.
+
 ## [1.0.0] - 2026-10-13
 
 ### Added

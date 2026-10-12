@@ -6,7 +6,7 @@ In-app automation server for **unattended GUI testing** of VCL applications. An 
 **Hosts.** Two kinds use this one unit:
 
 - **Applications** (the 27 DBiWorkflow VCL apps) link it statically through the library path and start it on `/AUTOMATION`.
-- **gllIdeAutomation** loads this package into the Delphi IDE through its `requires` clause, starts it on `GITLAK_IDE_AUTOMATION=1`, and adds its ToolsAPI and `tree_text` commands with `RegisterCommand`.
+- **gllIdeAutomation** (`gllIdeAutomation\` in this repository) loads this package into the Delphi IDE through its `requires` clause, starts it on `GITLAK_IDE_AUTOMATION=1`, and adds its ToolsAPI and `tree_text` commands with `RegisterCommand`.
 
 Until 2026-10-13 the unit lived in GITLAKLib with a renamed, hand-synced copy in gllIdeAutomation. See the `CHANGELOG.md` entry for 1.0.0.
 
@@ -229,4 +229,4 @@ TAutomationServer.RegisterCommand( 'myapp_state',
 ## Related
 
 - `D:\GITLAKMCP\src\Tools\GitLAKMCP.Tool.AppAutomation.pas` — the agent-side tools.
-- `D:\gllIdeAutomation` — the IDE host and its registered commands.
+- `gllIdeAutomation\` in this repository — the IDE host and its registered commands.

@@ -33,7 +33,7 @@ the `gllAutomationServer` runtime package.
 
 ### What it uses from `gllAutomationServer`
 
-The server lives in its own package and repository, `D:\gllAutomationServer` (unit
+The server is its own package, at the root of this repository, `D:\gllAutomationServer` (unit
 `gllAutomationServer`, package version 1.0.0.0, wire protocol version `0.11`), which this package
 `requires`. Its full API is in `D:\gllAutomationServer\Help.md`; the parts used here:
 
@@ -232,9 +232,11 @@ connection closed with no reply is a genuine fault and worth reporting; the one 
 
 ## 4. Scope of this package
 
-**There is no upstream.** `git remote -v` shows `origin` only
-(`https://github.com/ijbranch/gllIdeAutomation.git`). This is a GITLAK original, not a fork of a
-third-party project, so there is nothing to merge from and no divergence to justify.
+**There is no upstream.** Since 2026-10-13 this package lives in the `gllAutomationServer` repository
+(`https://github.com/ijbranch/gllAutomationServer`, folder `gllIdeAutomation\`), beside the server it
+requires; its earlier history came with it, and its old tags are `gllIdeAutomation-v1.0.0`,
+`-v1.0.1` and `-v1.2.0`. This is a GITLAK original, not a fork of a third-party project, so there is
+nothing to merge from and no divergence to justify.
 
 - **The server is not part of this package.** It is the shared runtime package
   `gllAutomationServer` (`D:\gllAutomationServer`,
