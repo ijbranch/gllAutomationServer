@@ -43,3 +43,6 @@ nul
 QuickLog.txt
 
 # NOTE: .res / .dproj / .dpk / .pas are version-controlled (project metadata).
+
+# IDE temporary and backup files - never commit them (estate rule, 2026-10-03)
+*.$$$

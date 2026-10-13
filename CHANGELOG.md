@@ -5,6 +5,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Changed
+- **`.gitignore` now ignores IDE temporary and backup files** (2026-10-14) - `.gitignore`. Added the missing ones of `*.$$$`, `*.bak` and `*.~*`, so a `git add -A` taken while the IDE is building cannot commit them (the estate rule since 2026-10-03, after two `.$$$` files were committed that way). Found by GITLAKMCP's `repo_health`.
 - **Relicensed from MIT to GITLAK proprietary: the automation projects are in-house** (2026-10-13) - `LICENSE`, `gllAutomationServer.pas`, `gllAutomationServer.dpk`, `gllAutomationServer.dproj`, `Tests\TestGllAutomationServer.pas`, `Tests\gllAutomationServerTests.dpr`, `README.md`, `CLAUDE.md`, and gllIdeAutomation's sources (see its CHANGELOG). Ian, 2026-10-13: "the two automation projects are now purely ours". Every source file now opens with the GITLAK header block (the GITLAKMCP form, without GITLAKLib's retired licensee clause), followed by its own descriptive comment; the version resource's `LegalCopyright` says the same. `LICENSE` is now a proprietary notice and records that copies taken under MIT while gllIdeAutomation was public keep the rights that licence gave. Estate rules apply in full from here: Delphi 13 floor, FULL DocInsight, zero hints and warnings.
 
 ### Added
