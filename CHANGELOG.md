@@ -2,7 +2,9 @@
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [In-Service]
+
+> Changes below are live as soon as the project is Release-built and installed - there is no separate release step, so there is no `[Unreleased]` backlog (Ian, 2026-10-19: "As soon as these are Release built they are Released").
 
 ### Changed
 - **`.gitignore` now ignores IDE temporary and backup files** (2026-10-14) - `.gitignore`. Added the missing ones of `*.$$$`, `*.bak` and `*.~*`, so a `git add -A` taken while the IDE is building cannot commit them (the estate rule since 2026-10-03, after two `.$$$` files were committed that way). Found by GITLAKMCP's `repo_health`.
