@@ -836,7 +836,7 @@ begin
   var oReply := Shoot( Format( '{"form":"%s","name":"Memo1","maxWidth":75}', [ FORM_NAME ] ), oPng );
   try
     Assert.AreEqual( 75, oPng.Width, 'width' );
-    Assert.AreEqual( Round( FMemo.Height * 75 / FMemo.Width ), oPng.Height, 'height' );
+    Assert.AreEqual<Int64>( Round( FMemo.Height * 75 / FMemo.Width ), oPng.Height, 'height' );
     Assert.AreEqual( FMemo.Width, oReply.GetValue<Integer>( 'result.sourceWidth' ), 'sourceWidth' );
     Assert.AreEqual( 75, oReply.GetValue<Integer>( 'result.width' ), 'reply width' );
   finally
