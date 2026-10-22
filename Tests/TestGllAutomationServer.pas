@@ -171,8 +171,11 @@ type
     [Test] procedure Keys_BadChord_IsRefusedBeforeSending;
     /// <summary>
     ///   A named windowed control is RENDERED, not copied off the screen: the test form sits at -3000,
-    ///   where a screen capture shows only whatever is there, yet the PNG is the memo's own size and its
-    ///   own magenta background.
+    ///   where a screen capture shows only whatever is there, yet the PNG is the memo's own size, its
+    ///   background is the active style's edit colour with the memo's text drawn on it (the text tells a
+    ///   real render from a blank one), and its left border is the one the style draws, not the unstyled
+    ///   sunken edge (the border tells a styled render from an unstyled one, since white and black are
+    ///   the same either way).
     /// </summary>
     [Test] procedure Screenshot_OfAControl_RendersItself_EvenOffScreen;
     /// <summary>A non-windowed control (a TLabel) has no window to render, so it is cropped out of its parent's rendering - at its own size, in its own yellow.</summary>
@@ -180,9 +183,10 @@ type
     /// <summary>maxWidth scales the image down proportionally, and the reply gives the source size so the caller knows it was scaled.</summary>
     [Test] procedure Screenshot_MaxWidth_ScalesProportionally;
     /// <summary>
-    ///   A whole-form render includes its child windows: the memo's fuchsia is found where the memo sits
-    ///   in the form's window. The VCL's PaintTo, the fallback, drew only the first child of a form, so
-    ///   this is what tells the DWM path (frame and every child) from a degraded one.
+    ///   A whole-form render includes its child windows: the memo's styled edit colour, with its text on
+    ///   it and the style's border round it, is found where the memo sits in the form's window, and that
+    ///   colour differs from the styled form behind it. The VCL's PaintTo, the fallback, drew only the
+    ///   first child of a form, so this is what tells the DWM path (frame and every child) from a degraded one.
     /// </summary>
     [Test] procedure Screenshot_OfAForm_IncludesItsChildren;
   end;
@@ -192,7 +196,7 @@ implementation
 uses
   System.SysUtils, System.Classes, System.Types, System.IOUtils, System.Diagnostics, System.Generics.Collections,
   Winapi.Windows,
-  Vcl.Graphics,
+  Vcl.Graphics, Vcl.Themes,
   IdTCPClient, IdGlobal,
   gllAutomationServer;
 
@@ -260,7 +264,8 @@ begin
   FMemo.Parent := FForm;
   FMemo.Lines.Text := 'line one' + sLineBreak + 'line two';
   FMemo.SetBounds( 200, 10, 150, 90 );
-  FMemo.Color := clFuchsia; // a colour nothing behind an off-screen form would happen to show
+  // No Color: the suite runs under the Aqua Light Slate style, which paints the memo's client in its own edit
+  // colour.  The screenshot tests assert that styled colour, and the memo's text, rather than a colour of ours.
 
   FLabel := TLabel.Create( FForm );
   FLabel.Name := 'lblInfo';
@@ -790,6 +795,97 @@ begin
 
 end;
 
+/// <summary>
+///   The colour the active VCL style paints an edit's client in, after asserting that the suite's style is the
+///   active one: the premise of every memo colour check below.
+/// </summary>
+/// <returns>The active style's <c>scEdit</c> colour.</returns>
+function StyledEditColour: TColor;
+begin
+
+  Assert.AreEqual( 'Aqua Light Slate', TStyleManager.ActiveStyle.Name, False, 'the runner activates the suite''s VCL style' );
+  Result := TStyleManager.ActiveStyle.GetStyleColor( scEdit );
+
+end;
+
+/// <summary>
+///   Counts the pixels in a rectangle of a PNG that stand well clear of a background colour - ink, such as text,
+///   drawn on it.  A blank render has none.
+/// </summary>
+/// <param name="APng">The image read.</param>
+/// <param name="ARect">The area to scan, in the image's coordinates.</param>
+/// <param name="ABackground">The background the ink is measured against.</param>
+/// <returns>The number of pixels whose summed channel distance from the background exceeds 192.</returns>
+function InkPixels( APng: TPngImage; const ARect: TRect; ABackground: TColor ): Integer;
+begin
+
+  Result := 0;
+  var c := ColorToRGB( ABackground );
+  for var iY := ARect.Top to ARect.Bottom - 1 do
+    for var iX := ARect.Left to ARect.Right - 1 do
+    begin
+      var p := ColorToRGB( APng.Pixels[ iX, iY ] );
+      if ( Abs( GetRValue( p ) - GetRValue( c ) ) + Abs( GetGValue( p ) - GetGValue( c ) ) +
+        Abs( GetBValue( p ) - GetBValue( c ) ) ) > 192 then
+        Inc( Result );
+    end;
+
+end;
+
+/// <summary>
+///   The colour the active style paints at one pixel of an edit border (<c>teEditBorderNoScrollNormal</c>, an
+///   unfocused memo with no scroll bars) drawn over a control of the given size: what its style hook draws.
+/// </summary>
+/// <param name="AWidth">The control's width.</param>
+/// <param name="AHeight">The control's height.</param>
+/// <param name="AX">The column read.</param>
+/// <param name="AY">The row read.</param>
+/// <returns>The colour of that pixel of the border.</returns>
+function StyledEditBorderPixel( AWidth, AHeight, AX, AY: Integer ): TColor;
+begin
+
+  var oStyle := TStyleManager.ActiveStyle;
+  var oBitmap := TBitmap.Create;
+  try
+    oBitmap.PixelFormat := pf32bit;
+    oBitmap.SetSize( AWidth, AHeight );
+    oBitmap.Canvas.Brush.Color := clFuchsia; // anything the border does not draw stays visibly not a border
+    oBitmap.Canvas.FillRect( Rect( 0, 0, AWidth, AHeight ) );
+    oStyle.DrawElement( oBitmap.Canvas.Handle, oStyle.GetElementDetails( teEditBorderNoScrollNormal ), Rect( 0, 0, AWidth, AHeight ) );
+    Result := oBitmap.Canvas.Pixels[ AX, AY ];
+  finally
+    oBitmap.Free;
+  end;
+
+end;
+
+/// <summary>
+///   Asserts that the memo's left border, in a render, is the border the ACTIVE style draws and not the unstyled
+///   sunken edge (<c>clBtnShadow</c> from the system, <c>$A0A0A0</c> here).  The style's edit colour and the text are
+///   the same with and without the style (white, black), so this is the check only a styled render passes: the
+///   style hook paints the border.  Mutation-proved 2026-10-23: with the memo's <c>StyleElements</c> emptied, the
+///   render shows <c>$A0A0A0</c> and both screenshot tests fail here.
+/// </summary>
+/// <param name="APng">The render.</param>
+/// <param name="ALeft">The memo's left edge in the render.</param>
+/// <param name="ATop">The memo's top edge in the render.</param>
+/// <param name="AWidth">The memo's width.</param>
+/// <param name="AHeight">The memo's height.</param>
+/// <param name="AContext">Appended to a failure message.</param>
+/// <exception cref="ETestFailure">The styled and system borders cannot be told apart, or the render shows the wrong one.</exception>
+procedure AssertStyledEditBorder( APng: TPngImage; ALeft, ATop, AWidth, AHeight: Integer; const AContext: string );
+begin
+
+  var cStyled := StyledEditBorderPixel( AWidth, AHeight, 0, AHeight div 2 );
+  var cUnstyled := ColorToRGB( clBtnShadow ); // Vcl.Graphics.ColorToRGB asks GetSysColor, never the style
+  Assert.IsFalse( NearColor( cStyled, cUnstyled ), Format( 'precondition: the styled edit border ($%.6x) differs from the unstyled edge ($%.6x)',
+    [ ColorToRGB( cStyled ), cUnstyled ] ) );
+  var cPixel := APng.Pixels[ ALeft, ATop + AHeight div 2 ];
+  Assert.IsTrue( NearColor( cPixel, cStyled ), Format( 'expected the memo''s styled left border $%.6x, got $%.6x (unstyled it is $%.6x): %s',
+    [ ColorToRGB( cStyled ), ColorToRGB( cPixel ), cUnstyled, AContext ] ) );
+
+end;
+
 procedure TTestGllAutomationServer.Screenshot_OfAControl_RendersItself_EvenOffScreen;
 begin
 
@@ -799,9 +895,16 @@ begin
     Assert.AreEqual( 'control', oReply.GetValue<string>( 'result.area' ), False );
     Assert.AreEqual( FMemo.Width, oPng.Width, 'width' );
     Assert.AreEqual( FMemo.Height, oPng.Height, 'height' );
-    // Bottom-right, inside the border, below any text: the memo's own background.
+    // Bottom-right, inside the border, below any text: the memo's own background, in the style's edit colour.
+    var cEdit := StyledEditColour;
     var cPixel := oPng.Pixels[ oPng.Width - 8, oPng.Height - 8 ];
-    Assert.IsTrue( NearColor( cPixel, clFuchsia ), Format( 'expected the memo''s fuchsia, got $%.6x: %s', [ ColorToRGB( cPixel ), oReply.ToJSON ] ) );
+    Assert.IsTrue( NearColor( cPixel, cEdit ), Format( 'expected the memo''s styled edit colour $%.6x, got $%.6x: %s',
+      [ ColorToRGB( cEdit ), ColorToRGB( cPixel ), oReply.ToJSON ] ) );
+    // The style's edit colour is white, which a blank render is too, so the text on it is the proof of a real render.
+    Assert.IsTrue( InkPixels( oPng, Rect( 4, 2, oPng.Width - 20, oPng.Height div 2 ), cEdit ) > 0,
+      'expected the memo''s text in the render, found none: ' + oReply.ToJSON );
+    // White and black look the same unstyled: the border is what only the styled render shows.
+    AssertStyledEditBorder( oPng, 0, 0, FMemo.Width, FMemo.Height, oReply.ToJSON );
   finally
     oPng.Free;
     oReply.Free;
@@ -858,9 +961,18 @@ begin
     GetWindowRect( FMemo.Handle, rcMemo );
     Assert.AreEqual( rcForm.Width, oPng.Width, 'width: the form window, frame included' );
     // Inside the memo's bottom-right corner, in the form window's coordinates.
+    var cEdit := StyledEditColour;
     var cPixel := oPng.Pixels[ rcMemo.Right - rcForm.Left - 8, rcMemo.Bottom - rcForm.Top - 8 ];
-    Assert.IsTrue( NearColor( cPixel, clFuchsia ), Format( 'expected the memo''s fuchsia inside the form, got $%.6x: %s',
-      [ ColorToRGB( cPixel ), oReply.ToJSON ] ) );
+    Assert.IsTrue( NearColor( cPixel, cEdit ), Format( 'expected the memo''s styled edit colour $%.6x inside the form, got $%.6x: %s',
+      [ ColorToRGB( cEdit ), ColorToRGB( cPixel ), oReply.ToJSON ] ) );
+    // Bare form just left of the memo (the panels and buttons stop at x = 185): it must NOT be the edit colour, or
+    // finding that colour at the memo's place would not show that the memo was drawn.
+    var ptBare := FForm.ClientToScreen( Point( 195, 50 ) );
+    var cBare := oPng.Pixels[ ptBare.X - rcForm.Left, ptBare.Y - rcForm.Top ];
+    Assert.IsFalse( NearColor( cBare, cEdit ), Format( 'the styled form behind the memo is the edit colour too ($%.6x)', [ ColorToRGB( cBare ) ] ) );
+    Assert.IsTrue( InkPixels( oPng, Rect( rcMemo.Left - rcForm.Left + 4, rcMemo.Top - rcForm.Top + 2, rcMemo.Right - rcForm.Left - 20,
+      rcMemo.Top - rcForm.Top + rcMemo.Height div 2 ), cEdit ) > 0, 'expected the memo''s text inside the form, found none: ' + oReply.ToJSON );
+    AssertStyledEditBorder( oPng, rcMemo.Left - rcForm.Left, rcMemo.Top - rcForm.Top, rcMemo.Width, rcMemo.Height, oReply.ToJSON );
   finally
     oPng.Free;
     oReply.Free;
