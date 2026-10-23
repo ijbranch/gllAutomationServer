@@ -2,6 +2,8 @@
 
 In-app automation server for **unattended GUI testing** of VCL applications. An external agent (the `gitlak-mcp` `app_*` tools) drives and asserts on a running app — clicking, typing, reading/writing properties, answering modal dialogs, inspecting datasets, and screenshotting — over a loopback socket, with no human at the keyboard. It operates on the live VCL component model (not pixels), so it is coordinate-free, DPI/monitor-independent, and works on any build including an EurekaLog-packed one (it needs no debug symbols).
 
+This file is the lookup reference.  Task-by-task walkthroughs are in [Users Guide.md](Users%20Guide.md), and the change record is `CHANGELOG.md`.
+
 
 **Hosts.** Two kinds use this one unit:
 
