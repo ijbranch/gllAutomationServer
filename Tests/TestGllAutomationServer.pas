@@ -198,6 +198,7 @@ uses
   Winapi.Windows,
   Vcl.Graphics, Vcl.Themes,
   IdTCPClient, IdGlobal,
+  GllDUnitX.Station,
   gllAutomationServer;
 
 const
@@ -749,26 +750,13 @@ begin
 
 end;
 
-/// <summary>
-///   Ignores the calling test when this process runs in Session 0, the services' session. It has no
-///   interactive desktop, so DWM has nothing to compose and PrintWindow renders blank white - measured
-///   2026-10-13: 22/22 run from a desktop session, the three render tests white under GITLAKMCP's
-///   test_run, which launches from its service. The ignore says so, rather than failing for the
-///   environment or passing without having looked.
-/// </summary>
-procedure RequireInteractiveSession;
-begin
-
-  var iSession: DWORD;
-  if ProcessIdToSessionId( GetCurrentProcessId, iSession ) and ( iSession = 0 ) then
-    Assert.Ignore( 'Session 0 (launched from a service) has no interactive desktop to render; run the suite from a desktop session' );
-
-end;
-
 function TTestGllAutomationServer.Shoot( const AArgs: string; out APng: TPngImage ): TJSONObject;
 begin
 
-  RequireInteractiveSession;
+  { On a non-interactive window station ( GITLAKMCP's test_run starts suites from its service ) no window is
+    painted, so PrintWindow renders blank white - measured 2026-10-13: 22/22 from a desktop session, the render
+    tests white under test_run.  The shared guard ignores the test there instead of failing for the environment. }
+  RequireInteractiveStation( 'a painted window for PrintWindow to capture' );
   Result := Send( 'screenshot', AArgs );
   Assert.IsTrue( Result.GetValue<Boolean>( 'ok' ), Result.ToJSON );
   var sPath := Result.GetValue<string>( 'result.path' );
