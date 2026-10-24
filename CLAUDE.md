@@ -34,9 +34,9 @@ a registered command (`RegisterCommand` + `ResolveForm` / `ResolveComponent`), n
 - Tests: `Tests\gllAutomationServerTests.dproj` (DUnitX console, Win64 Debug). It links the package's DCUs
   from `..\37.0\<Platform>\<Config>`, so **rebuild the package first** or the run tests the old binary.
   Run `Tests\Win64\Debug\gllAutomationServerTests.exe --exitbehavior:Continue`.
-- **A service's window station paints nothing.** GITLAKMCP's `test_run` launches from its service, so the 4
-  screenshot-render tests ignore themselves there ( `GllDUnitX.Station.RequireInteractiveStation`, from
-  `gllDUnitX\Source\Gll` ) (18 passed / 4 ignored). Run the exe from a desktop session to exercise them (22/22).
+- **A service's window station paints nothing.** Since 2026-10-25 GITLAKMCP runs it on a hidden desktop of the interactive window station ( it is in `settings.ini [TestRunner] DesktopTargets`, GITLAKMCP f8b28a3 ), so `test_run` is 22/22.
+  Only if that falls back to the service's own station do the 4 screenshot-render tests ignore themselves
+  ( `GllDUnitX.Station.RequireInteractiveStation`, from `gllDUnitX\Source\Gll` ) (18 passed / 4 ignored). Run the exe from a desktop session to exercise them (22/22).
 - Bump `SERVER_VERSION` (the wire-protocol version `ping` reports) when commands or fields change, and the
   `PROTOCOL_VERSION` constant in the test with it. It is separate from the package's file version.
 - A stale `gllAutomationServer.dcu` anywhere on the library path shadows this one. GITLAKLib's output
