@@ -5,23 +5,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
-- **`keys` command: keyboard input through the host's own message loop** (2026-10-13) - `src\gllIdeAutomation.Server.pas`, `Help.md`, `README.md`, `Users Guide.md`, `docs\Users Guide.md`. Types `text`, then sends `keys` chords (`Ctrl+S`, `Tab Enter`, `Shift+F10`), to a windowed control, setting the modifier state per stroke and restoring it after; shortcuts, `KeyPreview`, dialog navigation and `OnKeyDown`/`OnKeyPress`/`OnKeyUp` fire as for a real keyboard, with no global input and no need for the host to be in the foreground. Runs on the worker thread and answers once delivered; a stroke that opens a modal window stops the sequence (`stoppedReason:"modal"`). New codes `BadKeys`, `Busy`, `NotTypable`, `Blocked`. Server version 0.10. Ported in the same change as GITLAKLib's `gllAutomationServer`; the bodies differ only by the documented list (no `DisableIdleTimers` call here; the step marker is registered as `gllIdeAutomation.KeyStep`). **Why:** shortcut-only commands and key-handler logic could not be driven at all; the idea came from reviewing Autopilot for Delphi (no code taken - its licence forbids it). Four modes build clean; exercised live on GITLAKLib's identical body, not yet inside the IDE.
+- (2026-10-13) **`keys` command: keyboard input through the host's own message loop** - `src\gllIdeAutomation.Server.pas`, `Help.md`, `README.md`, `Users Guide.md`, `docs\Users Guide.md`. Types `text`, then sends `keys` chords (`Ctrl+S`, `Tab Enter`, `Shift+F10`), to a windowed control, setting the modifier state per stroke and restoring it after; shortcuts, `KeyPreview`, dialog navigation and `OnKeyDown`/`OnKeyPress`/`OnKeyUp` fire as for a real keyboard, with no global input and no need for the host to be in the foreground. Runs on the worker thread and answers once delivered; a stroke that opens a modal window stops the sequence (`stoppedReason:"modal"`). New codes `BadKeys`, `Busy`, `NotTypable`, `Blocked`. Server version 0.10. Ported in the same change as GITLAKLib's `gllAutomationServer`; the bodies differ only by the documented list (no `DisableIdleTimers` call here; the step marker is registered as `gllIdeAutomation.KeyStep`). **Why:** shortcut-only commands and key-handler logic could not be driven at all; the idea came from reviewing Autopilot for Delphi (no code taken - its licence forbids it). Four modes build clean; exercised live on GITLAKLib's identical body, not yet inside the IDE.
 
 ### Removed
-- **The vendored server copy: this package now `requires` the shared gllAutomationServer package** (2026-10-13) - `src\gllIdeAutomation.Server.pas` (deleted), `gllIdeAutomation.dpk`, `gllIdeAutomation.dproj`, `src\gllIdeAutomation.Starter.pas`, `src\gllIdeAutomation.IdeCommands.pas`, `src\gllIdeAutomation.TreeText.pas`, `README.md`, `Help.md`, `Users Guide.md`, `docs\HELP.md`, `docs\Users Guide.md`. The server unit moved out of GITLAKLib into its own runtime package, [gllAutomationServer](https://github.com/ijbranch/gllAutomationServer) (`D:\gllAutomationServer`), and this package uses it instead of carrying a renamed copy. `requires` is now `rtl`, `vcl`, `designide`, `gllAutomationServer`; `vclimg`, `dbrtl`, `IndySystem` and `IndyCore` come with the server package. What the copy used to change is now chosen by the host: `Starter` calls `TAutomationServer.Start( APP_NAME, False )` so the IDE's plug-in timers are left alone, and `tree_text` is registered by `IdeCommands` (`CmdTreeText`) on the new public `ResolveForm` / `ResolveComponent`, so its wire behaviour is unchanged. The server arrives at protocol 0.11 (component paths, synthetic and reachable names, dotted properties; see its `CHANGELOG.md`). Four modes build clean; verified live in the 64-bit IDE: `ping` reports `package` 1.0.0.0 and `server` 0.11, and `tree_text` answers as a registered command. **Why:** the two copies drifted 283 lines apart once and every change had to be made twice.
-- **Unused `System.StrUtils`** (2026-10-08) - `gllIdeAutomation.IdeCommands.pas`. Left behind when its `IfThen` call became an `if` expression; the removal compiled with identical code bytes.
+- (2026-10-13) **The vendored server copy: this package now `requires` the shared gllAutomationServer package** - `src\gllIdeAutomation.Server.pas` (deleted), `gllIdeAutomation.dpk`, `gllIdeAutomation.dproj`, `src\gllIdeAutomation.Starter.pas`, `src\gllIdeAutomation.IdeCommands.pas`, `src\gllIdeAutomation.TreeText.pas`, `README.md`, `Help.md`, `Users Guide.md`, `docs\HELP.md`, `docs\Users Guide.md`. The server unit moved out of GITLAKLib into its own runtime package, [gllAutomationServer](https://github.com/ijbranch/gllAutomationServer) (`D:\gllAutomationServer`), and this package uses it instead of carrying a renamed copy. `requires` is now `rtl`, `vcl`, `designide`, `gllAutomationServer`; `vclimg`, `dbrtl`, `IndySystem` and `IndyCore` come with the server package. What the copy used to change is now chosen by the host: `Starter` calls `TAutomationServer.Start( APP_NAME, False )` so the IDE's plug-in timers are left alone, and `tree_text` is registered by `IdeCommands` (`CmdTreeText`) on the new public `ResolveForm` / `ResolveComponent`, so its wire behaviour is unchanged. The server arrives at protocol 0.11 (component paths, synthetic and reachable names, dotted properties; see its `CHANGELOG.md`). Four modes build clean; verified live in the 64-bit IDE: `ping` reports `package` 1.0.0.0 and `server` 0.11, and `tree_text` answers as a registered command. **Why:** the two copies drifted 283 lines apart once and every change had to be made twice.
+- (2026-10-08) **Unused `System.StrUtils`** - `gllIdeAutomation.IdeCommands.pas`. Left behind when its `IfThen` call became an `if` expression; the removal compiled with identical code bytes.
 
 ### Changed
-- **Proprietary and Delphi 13 only: the package is in-house** (2026-10-13) - `gllIdeAutomation.dpk`, `gllIdeAutomation.dproj`, `src\gllIdeAutomation.IdeCommands.pas`, `src\gllIdeAutomation.Starter.pas`, `src\gllIdeAutomation.TreeText.pas`, `LICENSE` (deleted; the repository root's `LICENSE` covers it), `README.md`, `Help.md`. Ian, 2026-10-13: "the two automation projects are now purely ours". The MIT headers become the GITLAK proprietary header (prepended to `Starter` and the `.dpk`, which had none), `LegalCopyright` follows, and the 10.3 Rio floor goes: the `{$LIBSUFFIX}` ladder is now plain `{$LIBSUFFIX AUTO}`, and the units' guards stop below `CompilerVersion 37.0` (Delphi 13). **Found while doing it:** a `CompilerVersion` test in a `.dpk` cannot work - the System unit is not loaded there, so the name is undeclared and every comparison on it is TRUE (a probe package printed `>= 37`, `>= 36` and `< 37` together). The old ladder only ever took its first branch, which happened to be the right one on 12 and 13; on an older IDE it would never have reached its own fallbacks. The floor is therefore enforced in the units, and the `.dpk` says why it has no guard.
-- **Moved into the gllAutomationServer repository, folder `gllIdeAutomation\`, with its history** (2026-10-13) - `Help.md`, `CHANGELOG.md`, `README.md`, `docs\HELP.md`, `docs\Users Guide.md` (wording that meant "this repository" now says "this package's folder"). The package is unchanged - same name, same `.dpk`, same BPL name and output folder, so the installed IDE package needs no re-registration. Old tags are now `gllIdeAutomation-v1.0.0` / `-v1.0.1` / `-v1.2.0` in the new repository, and the links at the foot of this file point there. `ijbranch/gllIdeAutomation` is archived. **Why:** this package `requires` gllAutomationServer, and changes that cross the two belong in one commit.
-- **D13 language features adopted** (2026-10-08) - `gllIdeAutomation.IdeCommands.pas`, `gllIdeAutomation.Server.pas`, `gllIdeAutomation.TreeText.pas`. 10 `not ( X in S )` / `not ( X is T )` rewritten as the D13 `not in` / `is not` operators (generated code byte-identical, verified per platform and configuration); 1 `IfThen(...)` call replaced by the `if ... then ... else` expression, which evaluates only the branch it picks.
-- **The version now comes from the `.dproj` and the build number auto-increments; `gllIdeAutomationVersion.rc` and `tools/bump-build.py` are gone** (2026-10-06) - `gllIdeAutomation.dproj`, `gllIdeAutomation.dpk`, `gllIdeAutomationVersion.rc`, `tools/bump-build.py`, `.gitignore`, `src/gllIdeAutomation.Server.pas`, `README.md`, `Help.md`, `Users Guide.md`, `docs/HELP.md`, `docs/Users Guide.md`. Ian, 2026-10-06: build auto-increment on for all our libraries and packages, and for this package Delphi's own mechanism rather than an automated `.rc` bump. `VerInfo_IncludeVerInfo` is on with the same identity the `.rc` carried (1.2.0, GITLAK Software, the MIT copyright line); the `{$R ...Version.rc}` directive, its `RcCompile` item and `.res` reference are removed. The counters live in `Cfg_1_Win64` (Debug) and `Cfg_2_Win64` (Release), the only groups Delphi's `IncrementBuildNumber` writes to; the existing Win32 Debug group counts too. **Why the `.rc` existed, and why that no longer holds:** it avoided Delphi's per-configuration copies and their `ProductVersion`-lags-`FileVersion` drift; that drift is now corrected at commit by the estate's `sync_dproj_productversion.py` hook. Four modes build; the BPL reports `1.2.0.0` with the old company and copyright strings.
+- (2026-10-13) **Proprietary and Delphi 13 only: the package is in-house** - `gllIdeAutomation.dpk`, `gllIdeAutomation.dproj`, `src\gllIdeAutomation.IdeCommands.pas`, `src\gllIdeAutomation.Starter.pas`, `src\gllIdeAutomation.TreeText.pas`, `LICENSE` (deleted; the repository root's `LICENSE` covers it), `README.md`, `Help.md`. Ian, 2026-10-13: "the two automation projects are now purely ours". The MIT headers become the GITLAK proprietary header (prepended to `Starter` and the `.dpk`, which had none), `LegalCopyright` follows, and the 10.3 Rio floor goes: the `{$LIBSUFFIX}` ladder is now plain `{$LIBSUFFIX AUTO}`, and the units' guards stop below `CompilerVersion 37.0` (Delphi 13). **Found while doing it:** a `CompilerVersion` test in a `.dpk` cannot work - the System unit is not loaded there, so the name is undeclared and every comparison on it is TRUE (a probe package printed `>= 37`, `>= 36` and `< 37` together). The old ladder only ever took its first branch, which happened to be the right one on 12 and 13; on an older IDE it would never have reached its own fallbacks. The floor is therefore enforced in the units, and the `.dpk` says why it has no guard.
+- (2026-10-13) **Moved into the gllAutomationServer repository, folder `gllIdeAutomation\`, with its history** - `Help.md`, `CHANGELOG.md`, `README.md`, `docs\HELP.md`, `docs\Users Guide.md` (wording that meant "this repository" now says "this package's folder"). The package is unchanged - same name, same `.dpk`, same BPL name and output folder, so the installed IDE package needs no re-registration. Old tags are now `gllIdeAutomation-v1.0.0` / `-v1.0.1` / `-v1.2.0` in the new repository, and the links at the foot of this file point there. `ijbranch/gllIdeAutomation` is archived. **Why:** this package `requires` gllAutomationServer, and changes that cross the two belong in one commit.
+- (2026-10-08) **D13 language features adopted** - `gllIdeAutomation.IdeCommands.pas`, `gllIdeAutomation.Server.pas`, `gllIdeAutomation.TreeText.pas`. 10 `not ( X in S )` / `not ( X is T )` rewritten as the D13 `not in` / `is not` operators (generated code byte-identical, verified per platform and configuration); 1 `IfThen(...)` call replaced by the `if ... then ... else` expression, which evaluates only the branch it picks.
+- (2026-10-06) **The version now comes from the `.dproj` and the build number auto-increments; `gllIdeAutomationVersion.rc` and `tools/bump-build.py` are gone** - `gllIdeAutomation.dproj`, `gllIdeAutomation.dpk`, `gllIdeAutomationVersion.rc`, `tools/bump-build.py`, `.gitignore`, `src/gllIdeAutomation.Server.pas`, `README.md`, `Help.md`, `Users Guide.md`, `docs/HELP.md`, `docs/Users Guide.md`. Ian, 2026-10-06: build auto-increment on for all our libraries and packages, and for this package Delphi's own mechanism rather than an automated `.rc` bump. `VerInfo_IncludeVerInfo` is on with the same identity the `.rc` carried (1.2.0, GITLAK Software, the MIT copyright line); the `{$R ...Version.rc}` directive, its `RcCompile` item and `.res` reference are removed. The counters live in `Cfg_1_Win64` (Debug) and `Cfg_2_Win64` (Release), the only groups Delphi's `IncrementBuildNumber` writes to; the existing Win32 Debug group counts too. **Why the `.rc` existed, and why that no longer holds:** it avoided Delphi's per-configuration copies and their `ProductVersion`-lags-`FileVersion` drift; that drift is now corrected at commit by the estate's `sync_dproj_productversion.py` hook. Four modes build; the BPL reports `1.2.0.0` with the old company and copyright strings.
 
-- **Every `FORK` fix is now in GITLAKLib too** (2026-09-29) - `src\gllIdeAutomation.Server.pas` (header only), `Help.md`. GITLAKLib's `gllAutomationServer` was rebuilt from this body the same day. The two now differ only by a list at the top of GITLAKLib's unit, which a comment-stripped diff confirms is complete. The header here no longer says the other fixes are still to go back. No code change here.
+- (2026-09-29) **Every `FORK` fix is now in GITLAKLib too** - `src\gllIdeAutomation.Server.pas` (header only), `Help.md`. GITLAKLib's `gllAutomationServer` was rebuilt from this body the same day. The two now differ only by a list at the top of GITLAKLib's unit, which a comment-stripped diff confirms is complete. The header here no longer says the other fixes are still to go back. No code change here.
 
 ### Fixed
 
-- **An in-IDE build re-saved the package `.dproj` without its Release output paths** (2026-10-07) —
+- (2026-10-07) **An in-IDE build re-saved the package `.dproj` without its Release output paths** —
   `gllIdeAutomation.dproj`. The output standard was two `Condition`-ed `DCC_BplOutput` / `DCC_DcpOutput` lines in the
   Base group, and the IDE keeps one value per property per group when it re-saves the project on a build, so it wrote
   back only the active config's: a committed re-save sent Release builds to the root `Bpl` / `Dcp` folders. Now one
@@ -42,9 +42,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Release 1.2.0** (2026-09-29) - `gllIdeAutomationVersion.rc`, `README.md`, `CHANGELOG.md`. The version resource moves to 1.2.0.0 and the commit is tagged `v1.2.0`.
-- **ToolsAPI commands: close the IDE without a prompt, walk and click its main menu, and drive its
-  own debugger** (2026-09-29) — `src\gllIdeAutomation.IdeCommands.pas` (new),
+- (2026-09-29) **Release 1.2.0** - `gllIdeAutomationVersion.rc`, `README.md`, `CHANGELOG.md`. The version resource moves to 1.2.0.0 and the commit is tagged `v1.2.0`.
+- (2026-09-29) **ToolsAPI commands: close the IDE without a prompt, walk and click its main menu, and drive its
+  own debugger** — `src\gllIdeAutomation.IdeCommands.pas` (new),
   `src\gllIdeAutomation.Server.pas`, `src\gllIdeAutomation.Starter.pas`, `gllIdeAutomation.dpk`,
   `gllIdeAutomation.dproj`, `Help.md`, `README.md`, `Users Guide.md`. 21 commands:
   `ide_modified`, `ide_quit` (`refuse`/`save`/`discard`/`ask`), `ide_menu`, `ide_menu_click`, and
@@ -78,7 +78,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     plain API box GxInspect saw in older IDEs. `dialogs` answered it "No", the IDE exited, and the edit was
     not saved.
 
-- **`tree_text` reads the debugger panes: Local Variables, Watch and Call Stack** (2026-09-25) —
+- (2026-09-25) **`tree_text` reads the debugger panes: Local Variables, Watch and Call Stack** —
   `src\gllIdeAutomation.TreeText.pas`, `src\gllIdeAutomation.Server.pas`, `gllIdeAutomation.dpk`,
   `gllIdeAutomation.dproj`, `Help.md`, `README.md`, `Users Guide.md`. `get` could never reach them:
   a `TVirtualStringTree` holds no text and asks its `OnGetText` handler for each cell as it paints,
@@ -108,7 +108,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `GetNodeLevel` via RTTI. Names the pane truncates (`TCustomF`, `FShuttingI`) come back whole,
   because the text comes from the IDE's handler, not from the pixels.
 
-- **`ping`/`info` reports `package`, this package's OWN version** (2026-09-21) —
+- (2026-09-21) **`ping`/`info` reports `package`, this package's OWN version** —
   `src\gllIdeAutomation.Server.pas`, `Help.md`. `version` has always been `ParamStr( 0 )`'s, which
   inside the IDE is `bds.exe`'s — measured on the live IDE, `37.0.60952.8797`. So the single-source
   version in `gllIdeAutomationVersion.rc`, and the whole `VerInfo_IncludeVerInfo=false` apparatus
@@ -116,7 +116,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   which build of `gllIdeAutomation` an IDE had loaded. `GetPackageFileVersion` reads the version
   resource of `HInstance`, which in a package is the BPL itself. Verified live: `"package":"1.1.0.0"`
   alongside `"version":"37.0.60952.8797"`. **Carry back to GITLAKLib.**
-- **Stale discovery files are swept at startup** (2026-09-21) —
+- (2026-09-21) **Stale discovery files are swept at startup** —
   `src\gllIdeAutomation.Server.pas`, `Help.md`. `DeleteDiscovery` runs only on an orderly shutdown,
   so a host that was killed or crashed left its `<pid>.json` advertisement behind for ever.
   Consumers take the **first** file whose `app` matches — `tools/read_pane.py` does exactly that —
@@ -125,7 +125,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   and is kept, which errs towards keeping a stale file rather than deleting a live one.
   Verified twice against a live IDE, once with a planted `999123.json` and once with a genuine
   leftover from a previous run. **Carry back to GITLAKLib.**
-- **A request-line size limit, and the `RequestTooLong` error code** (2026-09-21) —
+- (2026-09-21) **A request-line size limit, and the `RequestTooLong` error code** —
   `src\gllIdeAutomation.Server.pas`, `Help.md`. Indy's default `MaxLineAction` is `maSplit`, which
   silently cuts an over-long request in two: the first half fails to parse as JSON and the second
   half is then dispatched **as if it were a separate request**. `MAX_REQUEST_BYTES` (1 MB) plus
@@ -134,7 +134,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   from it would be a fragment masquerading as the next request. Verified with a 2 MB line.
   **Carry back to GITLAKLib.**
 
-- **`Help.md` and `Users Guide.md`, to the estate documentation standard** (2026-09-18).
+- (2026-09-18) **`Help.md` and `Users Guide.md`, to the estate documentation standard**.
   `Help.md` carries both flavours: the Pascal surface is tiny (`TAutomationServer.Start` /
   `Stop` / `IsRunning` / `Port`), but the API people actually write against is the **wire
   protocol** — 13 commands, a fixed argument vocabulary and 23 stable error codes — which is a
@@ -151,7 +151,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **`tree_text` without `max` read ONE row, not 2,000** (2026-09-29) — `src\gllIdeAutomation.Server.pas`.
+- (2026-09-29) **`tree_text` without `max` read ONE row, not 2,000** — `src\gllIdeAutomation.Server.pas`.
   `TJSONValue.TryGetValue<T>` sets its out parameter to `Default( T )` when the key is MISSING
   (`System.JSON.pas`: `if not Result then AValue := Default(T)`). So the pattern "assign the
   default, then TryGetValue" silently replaced it with 0, and the reader clamped that to 1. The MCP
@@ -161,8 +161,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   value. GITLAKLib's `gllAutomationServer` was checked the same day and has no `TryGetValue` call, so
   the defect was fork-only.
 
-- **The vendored body was 283 lines and one wire version behind GITLAKLib, with two live bugs;
-  re-synced from `gllAutomationServer` 0.8** (2026-09-21) — `src\gllIdeAutomation.Server.pas`.
+- (2026-09-21) **The vendored body was 283 lines and one wire version behind GITLAKLib, with two live bugs;
+  re-synced from `gllAutomationServer` 0.8** — `src\gllIdeAutomation.Server.pas`.
   The unit header asserted the body was "unchanged - only this header, the unit name and one
   exception message differ". It was not: this copy sat at `SERVER_VERSION` **0.7** against
   upstream's **0.8**, 1425 lines against 1709. Nothing keeps the two in step and nothing had.
@@ -187,7 +187,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   forbids, and README said driving the IDE "turned out to need no changes at all" — so both were
   rewritten to describe the divergence and point at the `FORK` markers. The re-sync itself is a
   separate commit, deliberately, so a future merge can diff against exactly the upstream state.
-- **A wrongly typed envelope field dropped the connection with no reply** (2026-09-21) —
+- (2026-09-21) **A wrongly typed envelope field dropped the connection with no reply** —
   `src\gllIdeAutomation.Server.pas`, `Help.md`. `GetValue<T>` routes to `TJSONValue.AsType<T>`,
   which **raises** when a field is present but of the wrong type — `{"id":"abc"}` was enough. Both
   envelope reads sat outside `ExecuteCommand`'s own `try`, so the raise escaped with the response
@@ -199,7 +199,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   marshalled call, and every reply carries the `id`. Verified live — four previously fatal
   requests (`id` a string, `cmd` an object, `token` a number, a bad token) all now answer, and the
   probe reports **0 dropped connections**. **Carry back to GITLAKLib.**
-- **The discovery directory is created with a restricted DACL** (2026-09-21) —
+- (2026-09-21) **The discovery directory is created with a restricted DACL** —
   `src\gllIdeAutomation.Server.pas`, `Help.md`. The discovery file holds the session token, which
   is the only thing between a local user and a server that can drive the UI and write datasets —
   and the code asserted nothing about its permissions. Measured: `C:\ProgramData` grants
@@ -212,7 +212,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   rest of the GITLAK tooling — and a failed hardening still creates the directory but says so
   through `OutputDebugString` instead of passing silently. The SDDL was verified to produce
   exactly that ACL, with the current user still able to write. **Carry back to GITLAKLib.**
-- **The screenshot path assumed `%USERPROFILE%\Desktop`** (2026-09-21) —
+- (2026-09-21) **The screenshot path assumed `%USERPROFILE%\Desktop`** —
   `src\gllIdeAutomation.Server.pas`. The Desktop is routinely redirected (OneDrive does it by
   default), and the failure was not a miss but something worse: `CaptureRect` calls
   `ForceDirectories`, so the old path would **create** a second, empty `%USERPROFILE%\Desktop` and
@@ -222,14 +222,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   days and is the only thing keeping the names apart. Not reproducible on this machine — the
   Desktop here is not redirected — so this is a latent fault fixed on inspection, not a measured
   one. **Carry back to GITLAKLib.**
-- **`tree` and `dialogs` leaked their result on an error path** (2026-09-21) —
+- (2026-09-21) **`tree` and `dialogs` leaked their result on an error path** —
   `src\gllIdeAutomation.Server.pas`. Both built a `TJSONArray` that nothing owned yet and filled it
   before parenting it, so an exception part-way through — `CompToJSON` reads live published
   properties, and a getter can raise — abandoned the array, while the caller never received the
   object either because the assignment to `Result` had not happened. Both now create and parent
   first, under `try..except oRes.Free; raise;`. Bounded, but this runs inside an IDE that stays
   open for days. **Carry back to GITLAKLib.**
-- **`DisableIdleTimers` is no longer called in this host** (2026-09-21) —
+- (2026-09-21) **`DisableIdleTimers` is no longer called in this host** —
   `src\gllIdeAutomation.Server.pas`. Upstream runs it before every VCL command because it drives
   an **application** that may log itself out mid-test. `bds.exe` has no such timeout, so the only
   thing the sweep could achieve here was to reach into a third-party IDE plug-in, set an `Enabled`
@@ -237,7 +237,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   user's IDE, made by a tool whose entire job is to observe it. The routine is retained, and
   documented as retained, so the two copies still read alike. **This one is FORK-ONLY — do not
   carry it back**, since it is correct upstream.
-- **A bare `CR` inside `CHANGELOG.md` swallowed a heading** (2026-09-21). `### Fixed` and the
+- (2026-09-21) **A bare `CR` inside `CHANGELOG.md` swallowed a heading**. `### Fixed` and the
   bullet after it were joined by a lone `\r` rather than a `CRLF`, so the whole 2026-08-26
   C++Builder paragraph rendered as one `<h3>`. A repository-wide scan found this to be the only
   such character in any tracked `.md`, `.pas`, `.py`, `.ps1`, `.rc` or project file.
@@ -247,7 +247,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   stored as `LF` and converted on checkout by `core.autocrlf=true`. Normalising costs ~180 lines
   of whitespace-only churn once and stops the file being a special case; it is recorded here so
   nobody mistakes it for lost content.
-- **`README.md` claimed `Screen.CustomForms`; the code uses `Screen.Forms`** (2026-09-18,
+- (2026-09-18) **`README.md` claimed `Screen.CustomForms`; the code uses `Screen.Forms`** (
   corrected and actually fixed 2026-09-21) — `README.md`, `Help.md`, `docs/Users Guide.md`.
   `Screen.Forms` is a strict **subset** of `Screen.CustomForms`, so the documents claimed a
   broader reach than the code has. Now corrected at all five sites, including `Help.md`'s
@@ -259,26 +259,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   said "all four enumeration sites" when there are **three** `Screen.FormCount` loops
   (`AutoCmdTree` twice over, `AutoResolveForm`, `DisableIdleTimers`); the fourth `Screen.`
   reference is `Screen.ActiveForm`, which enumerates nothing.
-- **`docs/Users Guide.md` listed a `dataset_op` value that does not exist** (2026-09-18,
+- (2026-09-18) **`docs/Users Guide.md` listed a `dataset_op` value that does not exist** (
   **actually fixed 2026-09-21**). Its table gave "insert / append / edit / post / cancel /
   refresh / **navigate**", and the Server unit header used the same shorthand. `AutoCmdDatasetOp`
   accepts `insert`, `append`, `edit`, `post`, `cancel`, `refresh`, `first`, `last`, `next`,
   `prior`; `"op":"navigate"` returns `BadOp`. The 2026-09-18 entry recorded this under **Fixed**
   while leaving both the table row and the unit header untouched — they are corrected now.
-- **The coordinate tables in `README.md` and `docs/` quote 150% scaling** (2026-09-18, superseded
+- (2026-09-18) **The coordinate tables in `README.md` and `docs/` quote 150% scaling** (superseded
   2026-09-21). The original entry called them stale because the scaling changed on 2026-09-14; it
   went **back to 150% on 2026-09-20**, so the figures happen to be correct again. Neither fact is
   worth relying on. The root documents deliberately give the coordinate guidance with no scale
   factor or pixel figures at all, because a recorded coordinate must be re-measured, never
   rescaled — and `tools/click.py` now says so in its own docstring.
-- **A pre-standard pair survives at `docs/HELP.md` and `docs/Users Guide.md`** (2026-09-18) —
+- (2026-09-18) **A pre-standard pair survives at `docs/HELP.md` and `docs/Users Guide.md`** —
   wrong location and wrong capitalisation. Left in place; the root `Help.md` says they predate
   the standard, and as of 2026-09-21 `README.md` says so too instead of presenting them as the
   current documentation under a second, anchor-colliding `## Documentation` heading. Whether to
   delete them or reduce them to a redirect is a decision, not a tidy-up.
 
-- **Two `except` blocks no longer hide what went wrong, matching the fix already made in
-  `gllAutomationServer`** (2026-09-17) - `src\gllIdeAutomation.Server.pas`. This unit is a sibling of
+- (2026-09-17) **Two `except` blocks no longer hide what went wrong, matching the fix already made in
+  `gllAutomationServer`** - `src\gllIdeAutomation.Server.pas`. This unit is a sibling of
   GITLAKLib's `gllAutomationServer` and carried the identical code; a Pascal Analyzer sweep found both.
   - **The stopper thread's bare `except` was LOAD BEARING**, so it stays broad. `Stop` waits on
     `while not LFinished do CheckSynchronize( 50 )` and `LFinished := True` sat AFTER the handler, so
@@ -289,7 +289,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     raises exactly that on a locked, ACL-denied or already-gone file.
   - Built clean in all four modes, with the DCU timestamps checked in each.
 
-- `TargetedPlatforms` brought into line with the `<Platforms>` block in 1 `.dproj` (2026-09-10)
+- (2026-09-10) `TargetedPlatforms` brought into line with the `<Platforms>` block in 1 `.dproj`
   The earlier platform sweep removed the non-Windows `<Platform>` entries but left the
   `<TargetedPlatforms>` bitmask untouched, so projects still advertised targets they no
   longer declared — values such as `1048579` and `135171` encode Android/Linux/iOS, and
@@ -300,15 +300,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 
-- **Wire protocol 0.9: commands can be registered from outside the server; the package now requires
-  `designide`** (2026-09-29) — `src\gllIdeAutomation.Server.pas`, `gllIdeAutomation.dpk`,
+- (2026-09-29) **Wire protocol 0.9: commands can be registered from outside the server; the package now requires
+  `designide`** — `src\gllIdeAutomation.Server.pas`, `gllIdeAutomation.dpk`,
   `gllIdeAutomation.dproj`. `TAutomationServer.RegisterCommand`/`UnregisterCommand` add a command
   on the main or the worker thread, and `EAutoError` moved to the interface so such a command fails
   with a code of its own. Both are marked `FORK` and are generic, so both belong upstream in
   GITLAKLib. `designide` reverses the earlier "deliberately not" choice, which was made while
   nothing needed the ToolsAPI.
 
-- **The `tree_text` `WideString` finding is IDE-wide, not 64-bit-only — confirmed upstream** (2026-09-27)
+- (2026-09-27) **The `tree_text` `WideString` finding is IDE-wide, not 64-bit-only — confirmed upstream**
   — `CHANGELOG.md`, `Help.md`, `src\gllIdeAutomation.TreeText.pas` (a doc comment only). No code change. Thomas Mueller closed our GExperts
   `TREETEXT` report as fixed in **GxInspect r5813** (GxInspect now lives in its own svn branch,
   `https://svn.code.sf.net/p/gexperts/code/GxInspect/trunk`, pulled into GExperts as an external).
@@ -321,13 +321,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   killed. Nothing to change here, because `SignatureMismatch` already chooses the handler shape from
   type information rather than bitness and refuses anything else. He reached the same design
   independently, using the classic TypInfo `ParamList` instead of `System.Rtti`.
-- **Version raised to 1.1.0.0** (2026-09-21) — `gllIdeAutomationVersion.rc`. A minor bump rather
+- (2026-09-21) **Version raised to 1.1.0.0** — `gllIdeAutomationVersion.rc`. A minor bump rather
   than a build bump, because the wire contract moved: `SERVER_VERSION` 0.7 → 0.8, `ping` gained a
   field, and two error codes were added. `tools/bump-build.py --show` confirms the numeric defines
   and `VER_STRING` agree, and the built Release BPL reports `1.1.0.0` for both `FileVersion` and
   `ProductVersion`.
 
-- Project platforms normalised to Win32 + Win64 only in 1 `.dproj` file (2026-09-10)
+- (2026-09-10) Project platforms normalised to Win32 + Win64 only in 1 `.dproj` file
   Non-Windows targets (`Android`, `Android64`, `iOS*`, `OSX*`, `Linux64`) and the
   `Win64x` / `WinARM64EC` variants were removed together with their `Base_<Plat>` and
   `Cfg_N_<Plat>` property groups, `<Deployment>` platform nodes and `<ProjectRoot>`
@@ -335,13 +335,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   **Why:** standing suite rule — every gll* project is Delphi 13, Win32 + Win64, nothing
   else, so the four-mode package sweep is always possible.
 
-- Codeberg is retired; every repository URL points at GitHub again (2026-09-05).
+- (2026-09-05) Codeberg is retired; every repository URL points at GitHub again.
   **Why:** hosting consolidated back on GitHub. `origin` is the GitHub URL, the stale
   `codeberg` remote has been removed from the working checkout, and the documentation that
   says where to clone from was updated to match. The Codeberg entry below is superseded;
   its URLs are left as written because rewriting them would falsify the record.
 
-- Repository moved to the `GITLAK-forks` Codeberg organisation: `origin` is now `https://codeberg.org/GITLAK-forks/gllIdeAutomation.git`, and the documentation references were updated to match. **Why:** the `GITLAK` account had reached Codeberg's hard limit of 100 repositories, and an organisation carries its own allowance (2026-09-03) — `CHANGELOG.md`
+- (2026-09-03) Repository moved to the `GITLAK-forks` Codeberg organisation: `origin` is now `https://codeberg.org/GITLAK-forks/gllIdeAutomation.git`, and the documentation references were updated to match. **Why:** the `GITLAK` account had reached Codeberg's hard limit of 100 repositories, and an organisation carries its own allowance — `CHANGELOG.md`
   **Superseded 2026-09-05:** Codeberg is no longer used; see the entry above.
 
 ## [In-Service]
@@ -354,20 +354,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Fixed
 
-- **C++Builder output turned off** (2026-08-26). `DCC_CBuilderOutput` was `All`, so every build emitted `.hpp` / `.bpi` / `.a` / `.obj` files for a compiler that is **never in scope here** (standing rule: "I dont use C++ at all"). Across the estate that was 616 files and 90 MB of output nobody consumes, regenerated on every build; `gllSynEdit` alone accounted for 560. Now `None`. The `DCC_HppOutput` / `DCC_BpiOutput` / `DCC_ObjOutput` properties are left in place deliberately - they only say *where* such files would go, so with generation off they are inert, and removing them would enlarge the diff without changing behaviour. Verified: the affected packages rebuilt clean in every enabled mode, emitted no C++ artefacts, and rebuilt clean again after the existing ones were deleted (so nothing was load-bearing).
+- (2026-08-26) **C++Builder output turned off**. `DCC_CBuilderOutput` was `All`, so every build emitted `.hpp` / `.bpi` / `.a` / `.obj` files for a compiler that is **never in scope here** (standing rule: "I dont use C++ at all"). Across the estate that was 616 files and 90 MB of output nobody consumes, regenerated on every build; `gllSynEdit` alone accounted for 560. Now `None`. The `DCC_HppOutput` / `DCC_BpiOutput` / `DCC_ObjOutput` properties are left in place deliberately - they only say *where* such files would go, so with generation off they are inert, and removing them would enlarge the diff without changing behaviour. Verified: the affected packages rebuilt clean in every enabled mode, emitted no C++ artefacts, and rebuilt clean again after the existing ones were deleted (so nothing was load-bearing).
 
-- Debug and Release package output no longer collide (2026-08-24)
+- (2026-08-24) Debug and Release package output no longer collide
   **Why:** RAD Studio defaults `DCC_BplOutput` to `$(BDSCOMMONDIR)\Bpl\$(Platform)` and `DCC_DcpOutput` to `\Dcp\$(Platform)`, neither carrying `$(Config)`, so whichever configuration was built last was the one left installed. `.dcu` output was already separated, which masked it.
   Release still writes to the shared `Bpl`/`Dcp` folders - that is what is on `PATH`, and it is where dependent packages resolve their `requires` from - while Debug is diverted to a `$(Config)` subfolder. Separating Release as well breaks package loading, so only Debug moves.
   Verified by building the package in both configurations.
 
 ### Added
 
-- Documented that a build fails with two `F2039 Could not create output file` errors when an IDE
+- (2026-08-08) Documented that a build fails with two `F2039 Could not create output file` errors when an IDE
   has the package installed, because it holds both the `.bpl` and the `.dcp` open — and that this
   applies to command-line builds too, not just builds from inside the IDE. **Why:** it is the
   first wall anyone changing the source hits, the error text does not mention the cause, and the
-  error *count* is the diagnostic. Reproduced twice. (2026-08-08) — `docs/HELP.md`, `README.md`
+  error *count* is the diagnostic. Reproduced twice. — `docs/HELP.md`, `README.md`
 
 ## [1.0.1] - 2026-08-08
 
@@ -375,14 +375,14 @@ The release the announcement points at. Delphi 13 Florence, Win32 or Win64, MIT 
 
 ### Added
 
-- Initial package: starts the automation server inside the Delphi IDE, so external agent tools can drive the IDE through the live VCL component model instead of
+- (2026-08-08) Initial package: starts the automation server inside the Delphi IDE, so external agent tools can drive the IDE through the live VCL component model instead of
   synthesising keystrokes. **Why:** IDE-side behaviour — whether a debug visualizer is offered,
   how a value renders — is invisible to the compiler, and driving the IDE by `SendKeys` plus
   screenshots is slow, expensive in context, and carries a standing risk of typing into the
   wrong window. The server unit already existed for driving VCL applications under test; nobody was calling
-  `Start` inside the IDE. (2026-08-08) — `src/gllIdeAutomation.Starter.pas`,
+  `Start` inside the IDE. — `src/gllIdeAutomation.Starter.pas`,
   `gllIdeAutomation.dpk`, `gllIdeAutomation.dproj`
-- `tools/click.py` — clicks at a screen coordinate, which is what makes debugger panes readable.
+- (2026-08-08) `tools/click.py` — clicks at a screen coordinate, which is what makes debugger panes readable.
   Select a row with it, fire `lvCopyValue` through `app_click`, read the clipboard: the value
   arrives as text. Verified on two rows against what the pane displayed. **Why it needs care:**
   with two 4K monitors at 150%, screenshots come back in *physical* pixels (`CopyFromScreen`
@@ -390,34 +390,34 @@ The release the announcement points at. Delphi 13 Florence, Win32 or Win64, MIT 
   ones — a factor of exactly 1.5, so a coordinate read off a screenshot lands two thirds of the
   way to its target and `SendInput` still reports success. The tool declares
   `PER_MONITOR_AWARE_V2` so both spaces are physical, and refuses to click if the cursor will not
-  stay put, so a human using the mouse does not receive the click. (2026-08-08) — `tools/click.py`
-- Gated on the `GITLAK_IDE_AUTOMATION=1` environment variable, so an IDE launched any other way
+  stay put, so a human using the mouse does not receive the click. — `tools/click.py`
+- (2026-08-08) Gated on the `GITLAK_IDE_AUTOMATION=1` environment variable, so an IDE launched any other way
   is unaffected. **Why not a command-line switch:** `bds.exe` parses its own command
-  line and treats unrecognised arguments as files to open. (2026-08-08) —
+  line and treats unrecognised arguments as files to open. —
   `src/gllIdeAutomation.Starter.pas`
-- Version information on the BPL, defined once in `gllIdeAutomationVersion.rc` and linked by the
+- (2026-08-08) Version information on the BPL, defined once in `gllIdeAutomationVersion.rc` and linked by the
   `.dpk`. **Why:** the BPL is installed into a shared IDE, so when one misbehaves the first
   question is which build is loaded — and an unversioned DLL cannot answer it. Documented with the
-  one-line command that reads it back. (2026-08-08) — `gllIdeAutomationVersion.rc`,
+  one-line command that reads it back. — `gllIdeAutomationVersion.rc`,
   `gllIdeAutomation.dpk`, `gllIdeAutomation.dproj`, `README.md`, `docs/HELP.md`,
   `docs/Users Guide.md`
-- `tools/bump-build.py` — increments the build number in the `.rc`, rewriting the numeric
+- (2026-08-08) `tools/bump-build.py` — increments the build number in the `.rc`, rewriting the numeric
   `VER_BUILD` and the display `VER_STRING` together so they cannot drift, and refusing to write
-  unless it matched exactly one of each. (2026-08-08) — `tools/bump-build.py`, `README.md`,
+  unless it matched exactly one of each. — `tools/bump-build.py`, `README.md`,
   `docs/HELP.md`, `docs/Users Guide.md`
-- `$LIBSUFFIX` is now chosen by `CompilerVersion`, so the package builds on 10.3 Rio through 13
+- (2026-08-08) `$LIBSUFFIX` is now chosen by `CompilerVersion`, so the package builds on 10.3 Rio through 13
   Florence rather than 12 and later only. **Why:** `{$LIBSUFFIX AUTO}` is itself a 12-and-later
   feature, so on an older IDE the directive that was meant to supply the suffix was the thing that
   broke the build. Anything older than 10.3 stops with a `{$MESSAGE FATAL}` naming the requirement
-  instead of failing obscurely further in. (2026-08-08) — `gllIdeAutomation.dpk`, `README.md`
-- `gllIdeAutomation.diproj` — the DocInsight project that builds the API documentation from the
+  instead of failing obscurely further in. — `gllIdeAutomation.dpk`, `README.md`
+- (2026-08-08) `gllIdeAutomation.diproj` — the DocInsight project that builds the API documentation from the
   units' XML doc comments. It carries only relative paths, so it works from any clone. The
-  generated `build/docs` output is not tracked. (2026-08-08) — `gllIdeAutomation.diproj`,
+  generated `build/docs` output is not tracked. — `gllIdeAutomation.diproj`,
   `.gitignore`, `README.md`
 
 ### Changed
 
-- The version moved out of the `.dproj`'s `VerInfo_*` properties and into a resource script,
+- (2026-08-08) The version moved out of the `.dproj`'s `VerInfo_*` properties and into a resource script,
   `gllIdeAutomationVersion.rc`, with `VerInfo_IncludeVerInfo=false`. **Why:** Delphi's mechanism
   cannot be reduced to one definition — the `.dproj` keeps a Base copy plus one per build
   configuration, and deleting the per-configuration copy only makes the next build of that
@@ -425,20 +425,20 @@ The release the announcement points at. Delphi 13 Florence, Win32 or Win64, MIT 
   in that copy on Build while leaving `ProductVersion` behind, so the facility meant to manage the
   version is itself capable of shipping a BPL whose two version strings disagree. Verified after
   the move: building both configurations regenerates nothing, and exactly one file in the repo
-  defines a version. (2026-08-08) — `gllIdeAutomationVersion.rc`, `gllIdeAutomation.dpk`,
+  defines a version. — `gllIdeAutomationVersion.rc`, `gllIdeAutomation.dpk`,
   `gllIdeAutomation.dproj`, `.gitignore`
-- `tools/Start-IDE.ps1` finds the IDE in the registry (`Software\Embarcadero\BDS\<ver>\RootDir`,
+- (2026-08-08) `tools/Start-IDE.ps1` finds the IDE in the registry (`Software\Embarcadero\BDS\<ver>\RootDir`,
   HKCU then HKLM) instead of hard-coding one install path, preferring `bin64\bds.exe` where a
   version ships one. `-Version` and `-BdsPath` override it. **Why:** the path it hard-coded was
   13 Florence's, so on any other IDE the first script a new user runs threw — while the README
   offered 10.3 Rio and later. When the server fails to start it now names the BPL and the
-  `Known Packages` key for the IDE that was actually launched. (2026-08-08) — `tools/Start-IDE.ps1`,
+  `Known Packages` key for the IDE that was actually launched. — `tools/Start-IDE.ps1`,
   `README.md`
-- The supported range is stated as targeted rather than tested: 13 Florence is the only version
+- (2026-08-08) The supported range is stated as targeted rather than tested: 13 Florence is the only version
   the package has been built on. **Why:** an ambitious claim a stranger disproves in five minutes
   costs more than an honest one, and the 10.3–12 `$LIBSUFFIX` branches have never been
-  exercised. (2026-08-08) — `README.md`
-- Older IDEs are supported through the `.dpk` rather than through the `.dproj`. `<ProjectVersion>`
+  exercised. — `README.md`
+- (2026-08-08) Older IDEs are supported through the `.dpk` rather than through the `.dproj`. `<ProjectVersion>`
   was briefly lowered to 18.8 so an older IDE would open the project; that was abandoned because
   13 Florence rewrites it to 20.5 on every open, so the setting had to be reverted after each IDE
   session to stay committed. **Why this way instead:** the `.dpk` is the actual project and is
@@ -446,17 +446,17 @@ The release the announcement points at. Delphi 13 Florence, Win32 or Win64, MIT 
   produced a correct, correctly-versioned BPL. A `.dproj` is only the MSBuild wrapper belonging to
   whichever IDE wrote it, so an older IDE generates its own. Separate per-version project files
   were considered and rejected: five copies of the same settings would drift, and only the 13
-  Florence one could be tested here. (2026-08-08) — `gllIdeAutomation.dproj`, `README.md`,
+  Florence one could be tested here. — `gllIdeAutomation.dproj`, `README.md`,
   `docs/Users Guide.md`
-- The `.dproj` now holds whatever 13 Florence writes — `ProjectVersion` 20.5, the Win64x platform,
+- (2026-08-08) The `.dproj` now holds whatever 13 Florence writes — `ProjectVersion` 20.5, the Win64x platform,
   a `DCCReference` to the generated version resource, four-space indentation. It is treated as the
   IDE's file rather than a hand-maintained one, so opening the project no longer produces a diff
   to revert. A fresh checkout still builds: MSBuild compiles the `.rc` before resolving the
-  reference to its output. (2026-08-08) — `gllIdeAutomation.dproj`
+  reference to its output. — `gllIdeAutomation.dproj`
 
 ### Fixed
 
-- Three illegal control characters in the starter unit's doc comment, which stopped DocInsight
+- (2026-08-08) Three illegal control characters in the starter unit's doc comment, which stopped DocInsight
   transforming the topic to HTML (`0xC00CE508: An invalid character was found in text content`).
   The example path had been written through a layer that interprets C escape sequences, so
   `\37` became octal `0x1F` and each `\b` a backspace `0x08` — `Studio\37.0\bin64\bds.exe` was
@@ -464,20 +464,20 @@ The release the announcement points at. Delphi 13 Florence, Win32 or Win64, MIT 
   `\S` are not escape sequences. **Why it went unnoticed:** control characters are invisible in an
   editor and legal in Pascal comments, so the package compiled clean throughout — nothing but an
   XML parser was ever going to object. All four doc blocks now parse as XML, and no tracked text
-  file contains a character below 0x20 other than tab, CR or LF. (2026-08-08) —
+  file contains a character below 0x20 other than tab, CR or LF. —
   `src/gllIdeAutomation.Starter.pas`
-- The two entries above naming the starter unit called it `u_gllIdeAutomationStarter.pas`, which
-  has never existed here — it is `src/gllIdeAutomation.Starter.pas`. (2026-08-08) —
+- (2026-08-08) The two entries above naming the starter unit called it `u_gllIdeAutomationStarter.pas`, which
+  has never existed here — it is `src/gllIdeAutomation.Starter.pas`. —
   `CHANGELOG.md`
-- The docs said MSBuild "ignores" `VerInfo_AutoIncVersion`. It does not ignore it — it tries and
+- (2026-08-08) The docs said MSBuild "ignores" `VerInfo_AutoIncVersion`. It does not ignore it — it tries and
   fails, which is only visible below the default MSBuild verbosity. Right outcome, wrong reason,
-  in four places. (2026-08-08) — `README.md`, `docs/HELP.md`, `docs/Users Guide.md`,
+  in four places. — `README.md`, `docs/HELP.md`, `docs/Users Guide.md`,
   `tools/bump-build.py`
-- The note on why every copy of the version is rewritten now records two things that were
+- (2026-08-08) The note on why every copy of the version is rewritten now records two things that were
   measured rather than assumed: the per-configuration copy cannot be removed — delete it and the
   next build of that configuration writes it back, byte for byte — and the IDE's own
   auto-increment advances `FileVersion` while leaving `ProductVersion` behind, so a Build from
-  the IDE is by itself enough to produce a BPL whose two version strings disagree. (2026-08-08) —
+  the IDE is by itself enough to produce a BPL whose two version strings disagree. —
   `tools/bump-build.py`
 
 ## [1.0.0] - 2026-08-08
