@@ -12,8 +12,9 @@
 
     This code and all associated intellectual property, including proprietary
     algorithms and confidential information, are the exclusive property of Ian
-    Branch (GITLAK Software), save the portions named above, which remain
-    subject to GExperts' own licence.
+    Branch (GITLAK Software). The portions named above are used under the
+    written permission of Thomas Mueller, sole developer of GxInspect, given
+    2026-10-31 (see LICENSE).
 
     Any reproduction, distribution, or use, in whole or in part, by any other
     party is strictly prohibited without the express written permission of the
