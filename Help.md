@@ -64,6 +64,8 @@ App-specific awareness when driving:
 
 > **The apps find the unit through the library path** (`D:\gllAutomationServer\37.0\<Platform>\Release`). After a change here, rebuild this package (all four modes) and then the app; `ping`'s `server` field says which protocol version an app is running.
 
+> **Which deployed exes carry the server** (checked 2026-10-30): 24 of the apps start it only in **Debug** builds (`{$IFDEF DEBUG}` around `Start`), so their deployed Release exes contain no server at all and a change here needs no redeploy for them - any Debug build made for GUI testing picks it up.  **DBiDevDiag and DBiManager** start it in Release too: after a change here, rebuild and redeploy those two (done for 0.13 on 2026-10-30).  0.13's `dialogs` was proved in a real app the same day: DBiConfig's styled "Confirm" box (Ethea `TStyledTaskDialog`) listed as modal with its button handles, and No clicked once by the mouse path, `outcome:"gone"`.
+
 ---
 
 ## Transport, discovery & auth
