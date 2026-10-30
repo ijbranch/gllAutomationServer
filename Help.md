@@ -4,6 +4,7 @@ In-app automation server for **unattended GUI testing** of VCL applications. An 
 
 This file is the lookup reference.  Task-by-task walkthroughs are in [Users Guide.md](Users%20Guide.md), and the change record is `CHANGELOG.md`.
 
+> **hook = act, debugger = dissect.** This complements a debugger (GITLAKMCP's private `dbg_*` tools, or any other): the hook *drives* the app like a user; the debugger inspects breakpoints/stack/memory.
 
 **Hosts.** Two kinds use this one unit:
 
@@ -23,7 +24,7 @@ Until 2026-10-13 the unit lived in GITLAKLib with a renamed, hand-synced copy in
 
 ## When NOT to use
 
-- Low-level/crash analysis — use the `dbg_*` debugger tools.
+- Low-level/crash analysis — use a debugger.
 - Pixel-perfect visual regression — `screenshot` is confirmation only.
 
 ---
@@ -49,22 +50,16 @@ if FindCmdLineSwitch( 'AUTOMATION' ) then
 
 ---
 
-## DBiWorkflow deployment
+## Starting it in a host
 
-Wired into **27 DBiWorkflow VCL apps**. The `.dpr` adds `gllAutomationServer` to its plain uses clause and calls `Start` after `InstallSuiteLogger` (or after `Application.Initialize`). **Excluded:** DBManager, DBiServer (service), DBiFunctions (DLL), console/test tools, and a few trivial run-and-exit utilities.
+Each host starts the server on its own opt-in switch: an application on a command-line switch such as
+`/AUTOMATION` (see *Gating* above), gllIdeAutomation on the `GITLAK_IDE_AUTOMATION=1` environment
+variable.  A host may also add its own unattended test login, so that a suite can get past a login
+form; that is the host's business, with its own controls, and is not part of this library.
 
-The 27: DBiAccounts, DBiAdmin, DBiAnalytics, DBiAutoJob, DBiBackup, DBiConfig, DBiDashBoard, DBiDevDiag, DBiFieldTech, DBiFinance, DBiLogTriage, DBiLogViewer, DBiMaint, DBiManager, DBiOnLine, DBiPV, DBiReporter, DBiScheduledEvents, DBiScheduledReports, DBiScrap, DBiSCtoXX, DBiStore, DBiTaskViewer, DBiTimeSync, DBiUsers, DBiWhoIsOn, DBiWorkflow.
-
-App-specific awareness when driving:
-- **DBiOnLine** — log in with the **customer** account (`/company=CUSTOMER_KEY`); this Web-Portal app rejects admin accounts.
-- **DBiFieldTech / DBiOnLine** — Web-Portal apps; on the desktop they warn they're web-only and may keep MainForm hidden. The server still runs (verify via `ping` / `dialogs`).
-- **DBiMaint** — refuses to start while any other DBiWorkflow app is running, and once it *is* running no other app will start. Never drive other apps alongside it.
-- **DBiDevDiag** — hard-coded gate in `FormCreate`; the server starts before it, but MainForm only appears after that bespoke login.
-- **DBiTimeSync** — must be `ecc32`-injected with its **own** EurekaLog profile, not the shared `DBiWorkflow.eof`.
-
-> **The apps find the unit through the library path** (`D:\gllAutomationServer\37.0\<Platform>\Release`). After a change here, rebuild this package (all four modes) and then the app; `ping`'s `server` field says which protocol version an app is running.
-
-> **Which deployed exes carry the server** (checked 2026-10-30): 24 of the apps start it only in **Debug** builds (`{$IFDEF DEBUG}` around `Start`), so their deployed Release exes contain no server at all and a change here needs no redeploy for them - any Debug build made for GUI testing picks it up.  **DBiDevDiag and DBiManager** start it in Release too: after a change here, rebuild and redeploy those two (done for 0.13 on 2026-10-30).  0.13's `dialogs` was proved in a real app the same day: DBiConfig's styled "Confirm" box (Ethea `TStyledTaskDialog`) listed as modal with its button handles, and No clicked once by the mouse path, `outcome:"gone"`.
+An application links the unit statically through the library path, so after a change here rebuild this
+package (all four modes) and then the application; `ping`'s `server` field says which protocol version
+a host is running.
 
 ---
 
@@ -174,20 +169,16 @@ A **registered** command runs where it was registered to: `actMainThread` (the d
 
 ---
 
-## Auto-login (removed)
-
----
-
 ## Test side — `gllAutomationServer.Client` (0.14)
 
 A DUnitX suite drives an app with no AI in the loop:
 
 ```pascal
-var oApp := TAutomationApp.Launch( 'E:\DBiWorkflow\DBiUsers.exe' );   // adds /AUTOMATION, waits for the advertisement
+var oApp := TAutomationApp.Launch( 'C:\Apps\MyApp.exe' );             // adds /AUTOMATION, waits for the advertisement
 try
   oApp.SetProp( 'LogInForm', 'edtUserID', 'Text', 'USER01' );
   oApp.Click( 'LogInForm', 'btnOK' );
-  Assert.IsTrue( oApp.WaitForProp( 'main', '', 'Caption', 'DBiUsers', 10000 ) );
+  Assert.IsTrue( oApp.WaitForProp( 'main', '', 'Caption', 'MyApp', 10000 ) );
 finally
   oApp.Free;                                                          // Close: the close command, else terminate
 end;
@@ -220,7 +211,7 @@ end;
 | `app_screenshot` | `screenshot` (returns a Desktop PNG path to `Read`) |
 | `app_command` | any command, including registered ones (`tree_text`, `ide_*`, `debug_*` in the IDE) and `tree` with `deep` |
 
-`target` accepts an app name or PID, or is omitted when only one instance is running. Source: `D:\GITLAKMCP\src\Tools\GitLAKMCP.Tool.AppAutomation.pas`.
+`target` accepts an app name or PID, or is omitted when only one instance is running. They are GITLAKMCP's `app_*` tools (a private repository).
 
 ---
 
@@ -272,6 +263,6 @@ TAutomationServer.RegisterCommand( 'myapp_state',
 
 ## Related
 
-- `D:\GITLAKMCP\src\Tools\GitLAKMCP.Tool.AppAutomation.pas` — the agent-side tools.
+- GITLAKMCP's `app_*` tools (a private repository) — the agent-side client.
 - `gllAutomationServer.Client.pas` — the test-side client and the shared transport.
 - `gllIdeAutomation\` in this repository — the IDE host and its registered commands.

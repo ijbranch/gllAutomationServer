@@ -1,3 +1,4 @@
+# (C) 2016-2026 Ian Branch (GITLAK Software). See LICENSE.
 <#
 .SYNOPSIS
     Launches the Delphi IDE with the automation gate set, DPI-unaware.

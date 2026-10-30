@@ -5,7 +5,7 @@ error code, see [Help.md](Help.md).
 
 ## 1. Add it to an application
 
-1. Build the package (all four modes) and put `D:\gllAutomationServer\37.0\<Platform>\Release` on
+1. Build the package (all four modes) and put `<your clone>\37.0\<Platform>\Release` on
    the IDE's library path for Win32 and Win64. Command-line MSBuild reads the library path from
    `%APPDATA%\Embarcadero\BDS\37.0\EnvOptions.proj`, which the IDE rewrites when you change it.
 2. Add the unit to the `.dpr`'s uses clause — unconditionally, in every configuration:

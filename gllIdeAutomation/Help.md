@@ -14,13 +14,10 @@ This file is the **lookup** document for what this package adds: the gate, the 3
 registers, their error codes, and the IDE-specific failures with their exact text. The automation
 server itself (transport, discovery, addressing, the built-in commands and their error codes,
 threading, `keys`) is the runtime package `gllAutomationServer`, documented in
-`D:\gllAutomationServer\Help.md` ([GitHub](https://github.com/ijbranch/gllAutomationServer)).
+[`../Help.md`](../Help.md) ([GitHub](https://github.com/ijbranch/gllAutomationServer)).
 For how to get it running and drive it, read
 [Users Guide.md](Users%20Guide.md). The history is in [CHANGELOG.md](CHANGELOG.md); the
 rationale and the tooling are in [README.md](README.md).
-
-> `docs/HELP.md` and `docs/Users Guide.md` predate the estate documentation standard and are
-> still present. This pair in the package folder is the conforming one.
 
 ---
 
@@ -33,9 +30,9 @@ the `gllAutomationServer` runtime package.
 
 ### What it uses from `gllAutomationServer`
 
-The server is its own package, at the root of this repository, `D:\gllAutomationServer` (unit
+The server is its own package, at the root of this repository (unit
 `gllAutomationServer`, package version 1.0.0.0, wire protocol version `0.14`), which this package
-`requires`. Its full API is in `D:\gllAutomationServer\Help.md`; the parts used here:
+`requires`. Its full API is in [`../Help.md`](../Help.md); the parts used here:
 
 | Member | Used for |
 |---|---|
@@ -88,7 +85,7 @@ and docked controls, and a name that matches several is `Ambiguous`; `prop` may 
 (`Font.Size`) and `TStrings` read and write as text.
 
 Their fields, results, error codes, threading and the `keys` vocabulary are documented once, in
-`D:\gllAutomationServer\Help.md`. This file does not repeat them.
+[`../Help.md`](../Help.md). This file does not repeat them.
 
 There is no general `wait` command. Polling is a client concern; a blocking wait would hold the
 connection and the VCL thread it marshals onto. The one exception is the debugger commands that set
@@ -196,7 +193,7 @@ measured). Make the project that was run active again and everything comes back.
 | `max` | `ide_actions` | Actions listed, default `500`, clamped to `1`..`5000`. |
 
 The built-in commands' vocabularies (`click` `mode` and `count`, `dataset_op` `op`, `keys` chords
-and `timeoutMs`, `screenshot` `area`) are in `D:\gllAutomationServer\Help.md`.
+and `timeoutMs`, `screenshot` `area`) are in [`../Help.md`](../Help.md).
 
 ### Which thread a registered command runs on
 
@@ -218,7 +215,7 @@ the main thread themselves. Which built-ins run on the worker thread (`dialogs`,
 Every failure returns `{ id, ok:false, error:{ code, message } }` with a stable `code`. The
 envelope and built-in codes (`Unauthorised`, `UnknownCmd`, `RequestTooLong`, `Internal`, `NoProp`,
 `Ambiguous`, `NotObject`, `NilObject`, `NotScalar`, `ReadOnlyProp`, the `click` / `keys` / dataset
-codes and the rest) are listed in `D:\gllAutomationServer\Help.md`. The codes the 38 registered
+codes and the rest) are listed in [`../Help.md`](../Help.md). The codes the 38 registered
 commands raise, from their `EAutoError.CreateCode` / `CreateCodeData` sites:
 
 | Code | Raised when |
@@ -283,7 +280,7 @@ requires; its earlier history came with it, and its old tags are `gllIdeAutomati
 nothing to merge from and no divergence to justify.
 
 - **The server is not part of this package.** It is the shared runtime package
-  `gllAutomationServer` (`D:\gllAutomationServer`,
+  `gllAutomationServer` (at the repository root,
   [GitHub](https://github.com/ijbranch/gllAutomationServer)), which this package `requires`, so the
   IDE loads the same server unit as every other host. Until 2026-10-13 this package's own repository carried its
   own copy; that copy is gone, and with it any need to keep two copies in step.
@@ -535,7 +532,7 @@ Everything but `gllAutomationServer` ships with Delphi.
 | `rtl` | — |
 | `vcl` | `Vcl.Forms`, `Vcl.Controls`, `Vcl.Menus` — `tree_text`'s target and the `ide_menu*` commands |
 | `designide` | `ToolsAPI` — the `ide_*` and `debug_*` commands in `gllIdeAutomation.IdeCommands` |
-| `gllAutomationServer` | `TAutomationServer`, `EAutoError` — the server itself (`D:\gllAutomationServer`) |
+| `gllAutomationServer` | `TAutomationServer`, `EAutoError` — the server itself (the repository root) |
 
 `vclimg`, `dbrtl`, `IndySystem` and `IndyCore` are no longer required here: the server package
 requires them (for `screenshot`, the dataset commands and the Indy loopback listener), and they
@@ -577,5 +574,5 @@ and the package is inert unless the gate is set — so leaving it installed cost
 whether to set the variable permanently is the decision to take deliberately.
 
 The server starts only when a host explicitly opts in; that is the consumer's discipline, not
-something the server package can enforce (see *Gating* in `D:\gllAutomationServer\Help.md`). In
+something the server package can enforce (see *Gating* in [`../Help.md`](../Help.md)). In
 the IDE the opt-in is `GITLAK_IDE_AUTOMATION=1`.

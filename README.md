@@ -6,9 +6,10 @@ socket: click, type, read and write properties (including nested ones like `Font
 modal dialogs, read and edit datasets, and take screenshots. It works on the live VCL component
 model, not on pixels, so it is coordinate-free and DPI-independent, and it runs in Release builds.
 
-Built for unattended UI testing by an AI agent (the `gitlak-mcp` `app_*` tools), and by DUnitX suites
-with no AI in the loop (`gllAutomationServer.Client`: launch an app, drive it, assert, close it). The
-protocol is plain newline-delimited JSON, and any client can speak it.
+Built for unattended UI testing by an AI agent (GITLAKMCP's `app_*` tools, a private client), and by
+DUnitX suites with no AI in the loop (`gllAutomationServer.Client`, the public client in this
+repository: launch an app, drive it, assert, close it).  The protocol is plain newline-delimited JSON,
+and any client can speak it.
 
 - **[Users Guide.md](Users%20Guide.md)** — add it to an application and drive it.
 - **[Help.md](Help.md)** — the reference: commands, addressing, error codes, threading, API.
@@ -37,9 +38,10 @@ Administrators and SYSTEM can read.
 ## Requirements
 
 - **Delphi 13 Florence** (RAD Studio 37.0), VCL, **Win32 and Win64**.
-- Packages that ship with Delphi: `rtl`, `vcl`, `vclimg`, `dbrtl`; and Indy's `IndySystem`, `IndyCore` (bundled with Delphi, or gllIndy10 - see below).
-- **Indy:** developed and tested with Indy 10 from GitHub ([IndySockets/Indy](https://github.com/IndySockets/Indy),
-  through our fork gllIndy10), but it should work fine with the Indy that ships with Delphi: it uses only Indy
+- Packages that ship with Delphi: `rtl`, `vcl`, `vclimg`, `dbrtl`; and Indy's `IndySystem`, `IndyCore` (bundled with Delphi, or Indy 10 from GitHub - see below).
+- **Indy:** developed and tested with Indy 10 from GitHub ([IndySockets/Indy](https://github.com/IndySockets/Indy)),
+  through gllIndy10, GITLAK's private fork of it; here "Indy 10 from GitHub" always means that upstream
+  repository.  It should work fine with the Indy that ships with Delphi too: it uses only Indy
   10's basics (`TIdTCPServer`, `TIdTCPClient`, `ReadLn` / `WriteLn` with a line-length limit, `ReadLnTimedout`,
   `IndyTextEncoding_UTF8`), all present in Delphi 13's bundled Indy 10.6.3.
 
@@ -50,10 +52,10 @@ Administrators and SYSTEM can read.
      shipped, so the bundled copy does not have it. This server shuts its listener down every time an app
      closes, so with the bundled Indy an app driven with `/AUTOMATION` can occasionally hang on exit; a GUI
      suite that launches and closes apps many times a run would see that as sporadic time-outs.
-  2. **It is newer.** gllIndy10 is level with upstream `10.6.3.15`, well ahead of Delphi 13's snapshot, and carries
-     the upstream fixes made since it, reviewed and taken one by one.
-  3. **It is what this was tested with**, and its fixes have regression tests of their own (gllIndy10's
-     `Tests\gllIndyTests`).
+  2. **It is newer.** Upstream is well ahead of Delphi 13's snapshot (gllIndy10 is level with upstream
+     `10.6.3.15`), and carries the fixes made since it.
+  3. **It is what this was tested with**, through gllIndy10, which tracks upstream and whose fixes have
+     regression tests of their own.
 
   So use the bundled Indy if you must, and expect the occasional shutdown hang until a Delphi update ships an
   Indy with the fix.
@@ -64,13 +66,23 @@ Administrators and SYSTEM can read.
 Win64, Debug and Release). The DCUs land in `37.0\<Platform>\<Config>`, and the BPL and DCP go to the
 shared `Bpl` / `Dcp` folders (Release in `<Platform>`, Debug in `<Platform>\Debug`).
 
-- **An application** links the unit statically: put `D:\gllAutomationServer\37.0\<Platform>\Release`
+- **An application** links the unit statically: put `<your clone>\37.0\<Platform>\Release`
   on the IDE's library path (Tools > Options > Language > Delphi > Library) for both platforms.
 - **A package** that uses it (gllIdeAutomation does) puts `gllAutomationServer` in its `requires`
   clause.
 
-Tests: `Tests\gllAutomationServerTests.dproj`, a DUnitX console project. It links this package's
-DCUs, so build the package first.
+## Tests
+
+`Tests\gllAutomationServerTests.dproj` is a DUnitX console project (Win64).  To build it:
+
+1. Build this package first: the suite links its DCUs from `..\37.0\<Platform>\<Config>`.
+2. Clone [gllDUnitX](https://github.com/ijbranch/gllDUnitX) (public, a fork of DUnitX) beside this
+   repository, so that the two folders share a parent: the project's search path takes
+   `..\..\gllDUnitX\Source\Gll` for `GllDUnitX.Station`.
+3. DUnitX itself comes from the library path, as RAD Studio installs it.
+
+Run the suite on an interactive desktop: several tests are GUI tests (a modal dialog, screenshots)
+that need a painted window and ignore themselves without one.
 
 ## Who uses it
 
@@ -93,4 +105,16 @@ subtree merge, and its old tags are `gllIdeAutomation-v1.0.0`, `-v1.0.1` and `-v
 
 ## Licence
 
-Proprietary — GITLAK Software, in-house; see [LICENSE](LICENSE). (MIT and public until 2026-10-13.)
+Proprietary - GITLAK Software; the source is published for reference.  See [LICENSE](LICENSE):
+viewing and forking on GitHub are permitted, and nothing else is licensed.  Commits that carry an MIT
+LICENSE file (2026-08-08 to the relicensing commit of 2026-10-13) are MIT as that file says, and
+copies of them keep the rights MIT granted; nothing from the relicensing commit onward is.
+
+## Credits
+
+Portions adapted from GExperts' GxInspect by Thomas Mueller, by permission (see [LICENSE](LICENSE));
+the `tree_text` technique is his.
+
+## Contributing
+
+Issues are welcome.  Pull requests are not accepted: the code is proprietary.

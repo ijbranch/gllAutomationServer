@@ -1,3 +1,4 @@
+# (C) 2016-2026 Ian Branch (GITLAK Software). See LICENSE.
 """Click at a screen coordinate, in the same coordinate space as our screenshots.
 
 usage: python click.py X Y [--double] [--right] [--activate PID]

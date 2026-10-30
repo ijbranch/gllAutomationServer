@@ -46,3 +46,9 @@ QuickLog.txt
 
 # IDE temporary and backup files - never commit them (estate rule, 2026-10-03)
 *.$$$
+
+# Build output folders, DUnitX results and DelphiLSP settings
+Win32/
+Win64/
+dunitx-results.xml
+*.delphilsp.json

@@ -1,24 +1,23 @@
 ﻿(* GITLAK Software
   ***************************************************************************
 
-    (C) 2026 Ian Branch (GITLAK Software). All rights reserved.
+    (C) 2016-2026 Ian Branch (GITLAK Software). All rights reserved.
 
     Portions derived from GExperts' GxInspect by Thomas Mueller (dummzeuch),
     svn r6031: EventShape is ported from EventShape in ide\GxInspect_Ide.pas;
     FileIdMatches follows the matching rules of FindModuleFor and FindFormView
     in the same unit (by path, by file name, then by name without extension).
 
-    This code and all associated intellectual property, including proprietary
-    algorithms and confidential information, are the exclusive property of Ian
-    Branch (GITLAK Software), save the portions named above, which remain
-    subject to GExperts' own licence.
+    This code and all associated intellectual property are the exclusive
+    property of Ian Branch (GITLAK Software).  The portions named above are
+    used under the written permission of Thomas Mueller, sole developer of
+    GxInspect, given 2026-10-31 (see LICENSE).
 
     Any reproduction, distribution, or use, in whole or in part, by any other
     party is strictly prohibited without the express written permission of the
     Author.
 
-    Complete development history is retained & maintained in my Private GitHub
-    Repository.
+    Development history: https://github.com/ijbranch/gllAutomationServer
 
     THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
     IMPLIED.

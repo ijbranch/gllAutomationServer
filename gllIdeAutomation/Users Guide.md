@@ -11,7 +11,7 @@ exposes that model over a loopback socket, so instead of synthesising keystrokes
 pixels you ask the IDE what it has and tell it what to do.
 
 The server is not part of this package: it is the shared runtime package `gllAutomationServer`
-(`D:\gllAutomationServer`, documented in its `Help.md`), the same one any other GITLAK host uses.
+(at the repository root, documented in its [`Help.md`](../Help.md)), the same one any other GITLAK host uses.
 This package adds the gate that starts it inside the IDE and 22 commands only the IDE needs:
 `tree_text` and the ToolsAPI set.
 
@@ -232,7 +232,7 @@ its text (`Lines`, `Lines.Count`). `prop` may also be a dotted path through obje
 (`Font.Size`). `NoProp` means the property is not published, not that you spelled it wrong — and
 the failure carries `error.data.properties`, the ones the object *does* publish with their live
 values, so a near-miss corrects itself without another round-trip. The full rules are in
-`D:\gllAutomationServer\Help.md`.
+[`../Help.md`](../Help.md).
 
 ---
 
@@ -271,7 +271,7 @@ real keyboard, without the IDE needing to be in the foreground:
 
 Omit `name` to type into the form's focused control. `text` goes first, then `keys`; a chord is one
 key with optional `Ctrl+` / `Shift+` / `Alt+`, chords separated by spaces or commas (the full key
-list is in `D:\gllAutomationServer\Help.md`). The control is focused first unless `focus:false`. The reply comes once every
+list is in [`../Help.md`](../Help.md)). The control is focused first unless `focus:false`. The reply comes once every
 stroke has been delivered. If a keystroke opens a modal dialog the sequence stops there —
 `completed:false`, `stoppedReason:"modal"` — rather than typing into the window behind it; answer the
 dialog with `dialogs` (§9).
@@ -592,6 +592,6 @@ form again - look with `dialogs`.
 | You want | Read |
 |---|---|
 | a registered command's (`tree_text`, `ide_*`, `debug_*`) exact fields, or its error codes | [Help.md](Help.md) |
-| a built-in command's fields, addressing, the protocol or its error codes | `D:\gllAutomationServer\Help.md` ([GitHub](https://github.com/ijbranch/gllAutomationServer)) |
+| a built-in command's fields, addressing, the protocol or its error codes | [`../Help.md`](../Help.md) ([GitHub](https://github.com/ijbranch/gllAutomationServer)) |
 | why the package exists and what the tools do | [README.md](README.md) |
 | what changed and when | [CHANGELOG.md](CHANGELOG.md) |

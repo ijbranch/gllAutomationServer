@@ -1,3 +1,4 @@
+# (C) 2016-2026 Ian Branch (GITLAK Software). See LICENSE.
 """Read a value out of a Delphi IDE debugger pane, as text.
 
 usage: python read_pane.py X Y [--pane locals|watch] [--name]

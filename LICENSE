@@ -1,32 +1,48 @@
 GITLAK Software - proprietary
 
-(C) 2026 Ian Branch (GITLAK Software). All rights reserved.
+(C) 2016-2026 Ian Branch (GITLAK Software). All rights reserved.
 
 This repository (gllAutomationServer and gllIdeAutomation) and all associated intellectual
-property, including proprietary algorithms and confidential information, are the exclusive
-property of Ian Branch (GITLAK Software).
+property are the exclusive property of Ian Branch (GITLAK Software).
 
 Any reproduction, distribution, or use, in whole or in part, by any other party is strictly
 prohibited without the express written permission of the Author.
 
-Until 2026-10-13 parts of this code were published under the MIT Licence (gllIdeAutomation,
-a public repository until that date). Copies obtained under that licence before then keep the
-rights it granted; nothing in this repository after that date is offered under it.
+Published for reference.  Viewing and forking this repository on GitHub is permitted, as
+GitHub's Terms of Service (section D.5) provide for public repositories; no other licence is
+granted.
+
+Earlier MIT licence: from 2026-08-08 until the relicensing commit of 2026-10-13 ("Protocol 0.12 screenshot render mode; relicense in-house;
+Delphi 13 floor"), the repository carried an MIT LICENSE file; gllIdeAutomation was a public
+repository until that date.  Any commit that carries an MIT LICENSE file is licensed under MIT as
+that file says, and copies of those commits keep the rights MIT granted for them.  Nothing from the
+relicensing commit onward is offered under MIT.  Commit hashes are not cited here because the
+history was rewritten before publication.
 
 Third-party portions: GExperts' GxInspect, used by permission
 
-Five routines in gllAutomationServer.pas - WndCanBeClicked, WndIsModal, ClickOutcome,
-WindowAtControlPoint and BuildDropHandle - are adapted from GxInspect (host\GxInspect_Server.pas,
-svn r6031), written by Thomas Mueller, its sole developer. He gave written permission on
-2026-10-31 (a message to Ian Branch through Delphi-PRAXiS):
+These portions are adapted from GxInspect (svn r6031), written by Thomas Mueller, its sole
+developer:
+
+- gllAutomationServer.pas: five routines - WndCanBeClicked, WndIsModal, ClickOutcome,
+  WindowAtControlPoint and BuildDropHandle - from host\GxInspect_Server.pas.
+- gllIdeAutomation\src\gllIdeAutomation.IdeCommands.pas: TCpuDisassembler and debug_disasm;
+  the form-view swap behind ide_view_as_text / ide_view_as_form; FindFormEditor's two-pass
+  matching; and OpenFileKeepingForeground - all from ide\GxInspect_Ide.pas.
+- gllIdeAutomation\src\gllIdeAutomation.TreeText.pas: the technique of GxInspect's TREETEXT command
+  (reading the IDE's virtual trees), re-implemented, not copied.
+- gllIdeAutomation\src\gllIdeAutomation.Rules.pas: EventShape, and the matching rules
+  FileIdMatches follows (those of FindModuleFor and FindFormView) - from ide\GxInspect_Ide.pas.
+
+He gave written permission on 2026-10-31 (a message to Ian Branch through Delphi-PRAXiS):
 
     "I hereby give you permission to use any code from GxInspect in whatever way you want. It would
     be nice if you'd credit me as a contributor, but not a requirement. If it becomes a commercial
     success, please consider a donation to GExperts."
 
 Those portions are therefore used and distributed under the terms above, and he is credited as
-co-developer in the unit's header. The permission covers GxInspect only, the code he wrote; it
-does not extend to any other part of GExperts, none of which is used here.
+co-developer in each of those units' headers. The permission covers GxInspect only, the code he
+wrote; it does not extend to any other part of GExperts, none of which is used here.
 
 THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT
 SHALL THE AUTHOR BE LIABLE FOR ANY DAMAGES ARISING IN CONNECTION WITH THE USE OF THIS SOFTWARE.

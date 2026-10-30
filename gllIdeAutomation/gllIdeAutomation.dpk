@@ -1,18 +1,16 @@
 ﻿(* GITLAK Software
   ***************************************************************************
 
-    (C) 2026 Ian Branch (GITLAK Software). All rights reserved.
+    (C) 2016-2026 Ian Branch (GITLAK Software). All rights reserved.
 
-    This code and all associated intellectual property, including proprietary
-    algorithms and confidential information, are the exclusive property of Ian
-    Branch (GITLAK Software).
+    This code and all associated intellectual property are the exclusive
+    property of Ian Branch (GITLAK Software).
 
     Any reproduction, distribution, or use, in whole or in part, by any other
     party is strictly prohibited without the express written permission of the
     Author.
 
-    Complete development history is retained & maintained in my Private GitHub
-    Repository.
+    Development history: https://github.com/ijbranch/gllAutomationServer
 
     THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
     IMPLIED.

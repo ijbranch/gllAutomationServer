@@ -20,7 +20,7 @@ a registered command (`RegisterCommand` + `ResolveForm` / `ResolveComponent`), n
 ## Consumers, and what a change costs
 
 - **27 DBiWorkflow apps** link it statically through the library path
-  (`D:\gllAutomationServer\37.0\<Platform>\Release`, in `Library\Win32`/`Win64` and `EnvOptions.proj`).
+  (on the owner's machine, `D:\gllAutomationServer\37.0\<Platform>\Release`, in `Library\Win32`/`Win64` and `EnvOptions.proj`).
   A change reaches an app only when the app is rebuilt.
 - **gllIdeAutomation** (in `gllIdeAutomation\`) `requires` the package; the IDE loads `gllAutomationServer370.bpl` from the shared
   `Bpl\<Platform>` folder. **Close the IDE before building Release** (`F2039` otherwise), and restart it to

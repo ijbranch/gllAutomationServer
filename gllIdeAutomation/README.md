@@ -10,9 +10,10 @@ visualizer is offered on a type, what the evaluator calls that type, how a value
 Variables: none of that is visible to the compiler, and reading it off screenshots is slow and
 error-prone. This makes the IDE inspectable instead.
 
-Delphi **13 Florence** (RAD Studio 37.0), Win32 or Win64. Proprietary - GITLAK Software, in-house
-(it was MIT-licensed and public until 2026-10-13; see `LICENSE` at the repository root).
-Current version: **1.2.0** (tagged `v1.2.0`, 2026-09-29) — see [CHANGELOG.md](CHANGELOG.md). It carries
+Delphi **13 Florence** (RAD Studio 37.0), Win32 or Win64. Proprietary - GITLAK Software, source
+published for reference (MIT-licensed until the relicensing commit of 2026-10-13; see `LICENSE` at the
+repository root).
+Current version: **1.2.0** (tagged `gllIdeAutomation-v1.2.0`, 2026-09-29) — see [CHANGELOG.md](CHANGELOG.md). It carries
 wire protocol `0.9`; the previous release, 1.0.1, carried `0.7`. There is no 1.1.0 release: that number was
 only ever an untagged working version. (1.0.0 was tagged earlier the same day as 1.0.1 and
 superseded within hours; never take 1.0.0.)
@@ -67,10 +68,8 @@ as an error carrying your `id`, not as a closed connection.
    **Win32 for `bin\bds.exe`**. A design-time package must match the bitness of the IDE loading
    it, and the wrong one silently never loads. Both platforms are configured and both build clean.
 
-   **On an IDE older than 13 Florence, open `gllIdeAutomation.dpk` instead** and let your IDE
-   write its own `.dproj` alongside it. The `.dpk` is the actual project and is version-agnostic;
-   the `.dproj` here is just the MSBuild wrapper 13 Florence happens to have generated, and every
-   IDE rewrites it to its own format on open. Don't commit the one yours produces.
+   It needs Delphi 13 Florence or later: the units stop with `{$MESSAGE FATAL}` on an older IDE.
+   Build the `gllAutomationServer` package at the repository root first: this package `requires` it.
 2. **Component > Install Packages > Add**, and pick the built BPL. Note the registration is
    per-bitness: the 64-bit IDE reads `Known Packages x64`, the 32-bit IDE reads `Known Packages`.
 
@@ -149,7 +148,7 @@ Cross-check with `--name`.
 
 | Tool | Does |
 |---|---|
-| `tools/Start-IDE.ps1` | Launches the IDE with the gate set, waits for it to load, reports whether the server came up. Finds the newest installed IDE from the registry; `-Version 22.0` or `-BdsPath` to choose another. `-NoAutomation` for a clean comparison IDE. |
+| `tools/Start-IDE.ps1` | Launches the IDE with the gate set, waits for it to load, reports whether the server came up. Finds the newest installed IDE from the registry; `-Version 37.0` or `-BdsPath` to choose another. `-NoAutomation` for a clean comparison IDE. |
 | `tools/click.py` | Clicks at a screen coordinate. Read its docstring before rolling your own. |
 | `tools/read_pane.py` | `read_pane.py X Y [--pane locals\|watch] [--name]` — selects the row and prints its value. Speaks the protocol directly; no other tooling needed. |
 
@@ -171,7 +170,7 @@ It holds one small JSON file per running instance and nothing else.
 
 ## Working on it
 
-This package lives in the private gllAutomationServer repository (folder `gllIdeAutomation\`)
+This package lives in the gllAutomationServer repository (folder `gllIdeAutomation\`)
 since 2026-10-13. Things worth knowing before changing it:
 
 - A change to the server itself — a built-in command, addressing, the transport — belongs in
@@ -198,11 +197,6 @@ with `RegisterCommand`, as it always added the ToolsAPI commands.
 
 ## Generated API documentation
 
-The current documents are the two in this package's folder, linked at the top of this file. The pair
-under `docs/` — [docs/Users Guide.md](docs/Users%20Guide.md) and [docs/HELP.md](docs/HELP.md) —
-**predates the estate documentation standard and is superseded**; it is kept only because it was
-published under those names. Read the root pair.
-
 API documentation is generated from the units' XML doc comments by
 [DocInsight](https://devjetsoftware.com/docinsight/); `gllIdeAutomation.diproj` is the project that
 builds it, and the output lands in `build/docs` (not tracked). You do not need DocInsight to build
@@ -216,6 +210,7 @@ gllIdeAutomation.dproj          13 Florence's MSBuild wrapper, and the version i
 src/gllIdeAutomation.Starter    ~30 lines: the gate, and the call to Start
 src/gllIdeAutomation.IdeCommands  the ToolsAPI commands and tree_text, registered on the server
 src/gllIdeAutomation.TreeText   reads what a virtual tree displays (the debugger panes)
+src/gllIdeAutomation.Rules      the commands' rules that need no IDE, unit-tested by the suite
 tools/                          launcher, clicker, pane reader
 ```
 
@@ -235,7 +230,7 @@ tools/                          launcher, clicker, pane reader
   (Ian, 2026-10-06: auto-increment on for all our libraries and packages). Delphi bumps it in the
   per-configuration groups, so Win64 Release and Win64 Debug each keep their own count, and it
   bumps AFTER compiling: the BPL reports the number from before the bump. `ProductVersion` is kept
-  equal to `FileVersion` at commit by the estate's `sync_dproj_productversion.py` pre-commit hook.
+  equal to `FileVersion` at commit by the owner's pre-commit hook (not part of this repository).
   To change major, minor or release, edit `VerInfo_MajorVer` / `MinorVer` / `Release` (Project
   Options > Version Info).
 
