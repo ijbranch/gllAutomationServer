@@ -125,7 +125,10 @@ type
     /// <param name="ADir">The discovery folder.</param>
     /// <param name="AIsTrusted">The trust check; nil means the same-user check ( <c>PidIsSameUser</c> ).</param>
     /// <returns>The trusted endpoints, in no particular order; empty when there are none or the folder is missing.</returns>
-    /// <remarks>An unreadable or malformed file is skipped, and a live process's file is never deleted.</remarks>
+    /// <remarks>
+    ///   An unreadable, non-UTF-8 or malformed file is skipped, and a live process's file is never deleted.  An
+    ///   exception <c>AIsTrusted</c> raises is the caller's and propagates.
+    /// </remarks>
     class function ReadEndpoints( const ADir: string = AUTOMATION_DISCOVERY_DIR;
       const AIsTrusted: TAutomationTrustCheck = nil ): TArray<TAutomationEndpoint>; static;
     /// <summary>
@@ -563,10 +566,15 @@ begin
     try
       sText         := TFile.ReadAllText( sFile, TEncoding.UTF8 );
     except
-      //  the file is being written or was just removed: skip it this time
+      //  the file is being written or was just removed, shrank while read ( EReadError, an EStreamError ), or
+      //  is not UTF-8 ( EEncodingError ): skip it, since one bad file must not fail every lookup
       on EInOutError do
         Continue;
       on EOSError do
+        Continue;
+      on EStreamError do
+        Continue;
+      on EEncodingError do
         Continue;
     end;
 

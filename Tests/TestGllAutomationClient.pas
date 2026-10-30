@@ -119,8 +119,9 @@ type
     procedure Launch_NeverAdvertises_RaisesAndTerminates;
     /// <summary>
     ///   Proves the trust checks: a planted advertisement naming a live PID that does not own the port is
-    ///   ignored, one naming an exited process is deleted, a file whose fields have the wrong types is
-    ///   skipped instead of failing the whole lookup, and a trust check that says no excludes a real app.
+    ///   ignored, one naming an exited process is deleted, a file whose fields have the wrong types or that is
+    ///   not UTF-8 is skipped instead of failing the whole lookup, and a trust check that says no excludes a
+    ///   real app.
     /// </summary>
     [Test]
     procedure ReadEndpoints_TrustChecks;
@@ -504,6 +505,8 @@ begin
     //  fields of the wrong type, which GetValue<T> would raise on
     TFile.WriteAllText( TPath.Combine( FScratch, 'typed.json' ), '{"app":1,"pid":"x","port":"y","token":2}' );
     TFile.WriteAllText( TPath.Combine( FScratch, 'huge.json' ), '{"app":"Huge","pid":1e30,"port":1.5,"token":"x"}' );
+    //  not UTF-8: $C3 must be followed by a continuation byte, and ( is not one
+    TFile.WriteAllBytes( TPath.Combine( FScratch, 'bytes.json' ), TBytes.Create( $7B, $22, $C3, $28, $22, $7D ) );
     //  an exited process: the launched target's PID once it is closed
     var iGone       := FApp.Endpoint.Pid;
     FApp.Close;

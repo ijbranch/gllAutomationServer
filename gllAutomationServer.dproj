@@ -97,14 +97,14 @@
     <PropertyGroup Condition="'$(Cfg_1_Win64)'!=''">
         <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
         <VerInfo_AutoIncVersion>true</VerInfo_AutoIncVersion>
-        <VerInfo_Build>41</VerInfo_Build>
-        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllAutomationServer - in-app automation server;FileVersion=1.0.0.41;InternalName=gllAutomationServer;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllAutomationServer;ProductVersion=1.0.0.41;Comments=;CFBundleName=</VerInfo_Keys>
+        <VerInfo_Build>43</VerInfo_Build>
+        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllAutomationServer - in-app automation server;FileVersion=1.0.0.43;InternalName=gllAutomationServer;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllAutomationServer;ProductVersion=1.0.0.43;Comments=;CFBundleName=</VerInfo_Keys>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_2_Win64)'!=''">
         <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
         <VerInfo_AutoIncVersion>true</VerInfo_AutoIncVersion>
-        <VerInfo_Build>35</VerInfo_Build>
-        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllAutomationServer - in-app automation server;FileVersion=1.0.0.35;InternalName=gllAutomationServer;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllAutomationServer;ProductVersion=1.0.0.35;Comments=;CFBundleName=</VerInfo_Keys>
+        <VerInfo_Build>36</VerInfo_Build>
+        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllAutomationServer - in-app automation server;FileVersion=1.0.0.36;InternalName=gllAutomationServer;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllAutomationServer;ProductVersion=1.0.0.36;Comments=;CFBundleName=</VerInfo_Keys>
     </PropertyGroup>
     <ItemGroup>
         <DelphiCompile Include="$(MainSource)">
