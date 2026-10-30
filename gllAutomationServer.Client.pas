@@ -243,7 +243,7 @@ type
     /// <param name="AForm">The form.</param>
     /// <param name="AName">The component, or '' for the form itself.</param>
     /// <param name="AProp">The property.</param>
-    /// <returns>Its value as text ( a Boolean as <c>true</c> / <c>false</c> ).</returns>
+    /// <returns>Its value as text: an enumeration by its name, so a Boolean as <c>True</c> / <c>False</c> ( the server reads published properties with <c>GetPropValue</c>, which prefers strings ).</returns>
     /// <exception cref="EAutomationCommandError">For instance <c>NoComp</c>, or <c>NoProp</c> with the properties in <c>Data</c>.</exception>
     function GetProp( const AForm, AName, AProp: string ): string;
     /// <summary>Writes a property from text, which the server converts to the property's type.</summary>
