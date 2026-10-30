@@ -27,6 +27,9 @@ a registered command (`RegisterCommand` + `ResolveForm` / `ResolveComponent`), n
   pick up a change.
 - **GITLAKMCP**'s `app_*` tools are the client (`src\Tools\GitLAKMCP.Tool.AppAutomation.pas`). A new
   command or field usually wants a tool or a parameter there too.
+- **`gllAutomationServer.Client.pas`** (in this package) is the test-side client, for DUnitX suites that launch
+  and drive an app, and the one implementation of discovery, the trust checks and the send. A new command
+  usually wants a `TAutomationApp` method too; a change to the wire format changes both clients.
 
 ## Build and test
 

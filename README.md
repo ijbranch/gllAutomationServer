@@ -6,8 +6,9 @@ socket: click, type, read and write properties (including nested ones like `Font
 modal dialogs, read and edit datasets, and take screenshots. It works on the live VCL component
 model, not on pixels, so it is coordinate-free and DPI-independent, and it runs in Release builds.
 
-Built for unattended UI testing by an AI agent (the `gitlak-mcp` `app_*` tools), but the protocol is
-plain newline-delimited JSON, and any client can speak it.
+Built for unattended UI testing by an AI agent (the `gitlak-mcp` `app_*` tools), and by DUnitX suites
+with no AI in the loop (`gllAutomationServer.Client`: launch an app, drive it, assert, close it). The
+protocol is plain newline-delimited JSON, and any client can speak it.
 
 - **[Users Guide.md](Users%20Guide.md)** — add it to an application and drive it.
 - **[Help.md](Help.md)** — the reference: commands, addressing, error codes, threading, API.

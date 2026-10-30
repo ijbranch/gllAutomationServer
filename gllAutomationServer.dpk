@@ -76,6 +76,7 @@ requires
   IndyCore;
 
 contains
-  gllAutomationServer in 'gllAutomationServer.pas';
+  gllAutomationServer in 'gllAutomationServer.pas',
+  gllAutomationServer.Client in 'gllAutomationServer.Client.pas';
 
 end.

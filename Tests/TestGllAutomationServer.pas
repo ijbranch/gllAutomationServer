@@ -382,17 +382,17 @@ uses
   Vcl.Graphics, Vcl.Themes,
   IdTCPClient, IdGlobal,
   GllDUnitX.Station,
-  gllAutomationServer;
+  gllAutomationServer, gllAutomationServer.Client;
 
 const
-  /// <summary>Where the server advertises itself; must match gllAutomationServer's DISCOVERY_DIR.</summary>
-  DISCOVERY_DIR   = 'C:\ProgramData\GITLAK\Automation';
+  /// <summary>Where the server advertises itself: the one definition, in the client unit.</summary>
+  DISCOVERY_DIR   = AUTOMATION_DISCOVERY_DIR;
   /// <summary>How long one request may take before the test gives up on it.</summary>
   REQUEST_TIMEOUT = 10000;
   /// <summary>Name the test process registers under.</summary>
   APP_NAME        = 'gllAutomationServerTests';
   /// <summary>The wire-protocol version ping must report.</summary>
-  PROTOCOL_VERSION = '0.13';
+  PROTOCOL_VERSION = '0.14';
   /// <summary>Name of the test form, which the requests address.</summary>
   FORM_NAME       = 'AutoTestForm';
 

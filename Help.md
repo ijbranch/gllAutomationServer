@@ -110,7 +110,8 @@ Omitted = the form itself. Otherwise, in this order:
 
 | cmd | fields | result / effect |
 |---|---|---|
-| `ping` / `info` | — | `{ app, pid, version, package, exe, mainForm, server }`. `version` is the host exe's; `package` is the module holding this unit (this package's BPL inside the IDE, otherwise the exe again); `server` is the protocol version (`0.13`) |
+| `ping` / `info` | — | `{ app, pid, version, package, exe, mainForm, server }`. `version` is the host exe's; `package` is the module holding this unit (this package's BPL inside the IDE, otherwise the exe again); `server` is the protocol version (`0.14`) |
+| `close` | — | (0.14) closes the app through its own close path: `MainForm.Close` (so `OnCloseQuery` / `OnClose` run), started only once the reply `{ closing, mainForm }` has been written, so the reply is never lost to the exit; with no main form, `Application.Terminate`. A prompt such as "save changes?" can keep it open. Refused inside the IDE (`HostedInIde`), which `ide_quit` closes. Needed because a console host has no `TApplication` window to post `WM_CLOSE` to |
 | `tree` | `form?`, `deep?` | no form → `{ forms:[{name,class,visible}] }`; with form → `{ form, class, components:[{name,class,path?,props}] }` — the form's own components, plus with `deep:true` everything reachable (frame controls, docked controls). An unnamed component is listed under its synthetic name; `path` appears where the plain name is not what reaches it. Key published props: Caption/Text/Visible/Enabled/Checked/ItemIndex/bounds |
 | `get` | `form?`, `name?`, `prop` | `{ name, prop, value }` — see *Addressing a property*. On `NoProp` the failure carries `error.data` = `{ properties:[{name,type,value \| nested}], total, truncated }` |
 | `set` | `form?`, `name?`, `prop`, `value` | writes the property and reads it back → `{ name, prop, value, previous, changed }`. `changed:false` = it already held that value, so an `OnChange` almost certainly did not fire; the write is **not** elided. `NoProp` carries the **writable** property list |
@@ -124,7 +125,7 @@ Omitted = the form itself. Otherwise, in this order:
 | `field_set` | `form?`, `name`, `field`, `value` | `{ dataset, field, state, isNull, value }` — writes the field (JSON `null` clears it), putting a **browsing** dataset into edit mode first; an existing insert/edit is left alone and nothing is posted. Writes the data directly, so control-level `OnExit` / validation does **not** run — use `keys` for that path |
 | `dataset_op` | `form?`, `name`, `op` | `{ dataset, op, state, recNo }` — `op` = `insert` `append` `edit` `post` `cancel` `refresh` `first` `last` `next` `prior` (else `BadOp`). Needed because `TwwNavButton` does its dataset work in the navigator, not in `OnClick` |
 | `dataset` | `form?`, `name`, `fields?` | `{ dataset, active, recordCount, recNo, bof, eof }`; `fields:true` adds the current record's values |
-| `screenshot` | `form?`, `name?`, `area?`, `maxWidth?` | PNG saved to the real **Desktop** (Known Folder API) → `{ path, width, height, area, target?, renderer?, sourceWidth?, sourceHeight? }`. **Render mode** (0.12) — with a `name`, or a `form` and no `area`: the target's top-level window is rendered as it paints itself and the target cropped from it, at the host's own logical size, so it is legible at full detail and **correct even when the window is covered or off-screen**; `area` is `control` or `form`, `renderer` is `dwm` (or `paintTo`, a weaker fallback that may miss a form's child windows). **Capture mode** — otherwise: screen pixels of the monitor the active form/dialog is on, `area:"window"` that window, `area:"virtual"` the whole desktop — whatever is in front of the app is what you get. `maxWidth` scales either down proportionally (`sourceWidth`/`sourceHeight` then give the original). See *Screenshots* below |
+| `screenshot` | `form?`, `name?`, `area?`, `maxWidth?`, `path?` | PNG saved to `path` (0.14: a local drive path `X:\...` - not relative, drive-relative, UNC or a device path - ending `.png`, in a folder that exists, replacing any file there, else `BadPath`), or else to the real **Desktop** (Known Folder API) → `{ path, width, height, area, target?, renderer?, sourceWidth?, sourceHeight? }`. **Render mode** (0.12) — with a `name`, or a `form` and no `area`: the target's top-level window is rendered as it paints itself and the target cropped from it, at the host's own logical size, so it is legible at full detail and **correct even when the window is covered or off-screen**; `area` is `control` or `form`, `renderer` is `dwm` (or `paintTo`, a weaker fallback that may miss a form's child windows). **Capture mode** — otherwise: screen pixels of the monitor the active form/dialog is on, `area:"window"` that window, `area:"virtual"` the whole desktop — whatever is in front of the app is what you get. `maxWidth` scales either down proportionally (`sourceWidth`/`sourceHeight` then give the original). See *Screenshots* below |
 
 **Error codes:** `Unauthorised`, `UnknownCmd`, `NotVisual`, `OutsideControl`, `NoWindow`, `NoDropTarget`, `NoFile`, `AmbiguousButton`, `NotShowing`, `NoForm`, `NoComp`, `Ambiguous`, `NoProp`, `NotObject`, `NilObject`, `NotScalar`, `ReadOnlyProp`, `NoOnClick`, `NoHandler`, `NotButton`, `NotClickable`, `BadMode`, `BadCount`, `NoAction`, `ActionDisabled`, `NotDataSet`, `DataSetClosed`, `NoField`, `ReadOnlyField`, `BadOp`, `NoButton`, `CaptureFailed`, `BadKeys`, `Busy`, `NotTypable`, `Blocked`, `BadRequest`, `RequestTooLong`, `Internal`. A failure may carry `error.data` (`NoProp`, `NotScalar`, `Ambiguous`).
 
@@ -174,6 +175,31 @@ A **registered** command runs where it was registered to: `actMainThread` (the d
 ---
 
 ## Auto-login (removed)
+
+---
+
+## Test side — `gllAutomationServer.Client` (0.14)
+
+A DUnitX suite drives an app with no AI in the loop:
+
+```pascal
+var oApp := TAutomationApp.Launch( 'E:\DBiWorkflow\DBiUsers.exe' );   // adds /AUTOMATION, waits for the advertisement
+try
+  oApp.SetProp( 'LogInForm', 'edtUserID', 'Text', 'USER01' );
+  oApp.Click( 'LogInForm', 'btnOK' );
+  Assert.IsTrue( oApp.WaitForProp( 'main', '', 'Caption', 'DBiUsers', 10000 ) );
+finally
+  oApp.Free;                                                          // Close: the close command, else terminate
+end;
+```
+
+- **`TAutomationApp`**: `Launch` / `Attach` (name or PID), `Close`, `Call` (any command); `Attach` by a name several apps share refuses to guess, and one method per common command: `GetProp`, `SetProp` (returns whether the value changed), `Click` (a handler that raised fails it with `HandlerRaised`), `ClickAsync` (`mode=message`, for a click that opens a modal), `ExecuteAction`, `SendKeys`, `ModalDialogs`, `ClickDialogButton`, `FieldGet`, `FieldSet`, `DatasetOp`, `WaitForProp` (client-side polling) and `Screenshot` (to a path of the test's choosing).
+- **Errors:** a server error raises `EAutomationCommandError` with the server's `Code` and `Data`; a delivery failure raises `EAutomationClientError`, its ancestor.
+- **A modal's text:** `GetProp( 'active', 'Message', 'Caption' )` reads a `ShowMessage` / `MessageDlg` text, which `dialogs` cannot (the VCL builds it from a `TLabel`, which has no window).
+- **`TAutomationDiscovery`**: the transport and trust checks (`ReadEndpoints`, `PidOwnsLocalPort`, `PidIsSameUser`, `IsPidAlive`, `Send`), shared with GITLAKMCP's `app_*` tools. `ReadEndpoints` takes a trust check (default: the same user) and sweeps files of exited processes.
+- **Run it through `test_run` on the hidden desktop, not directly in a session someone is typing in**: each launched app's window takes the keyboard focus (found 2026-10-31; launching it not-activated hung the suite instead).
+- **Never call it from the driven app's main thread**: the commands run there, so the reply would wait for itself.
+- **Register a GUI suite in GITLAKMCP's `[TestRunner] DesktopTargets`.** On the service's own window station no window is visible: modal dialogs are never listed and screenshots come out blank (measured 2026-10-31). A suite that needs a database or a long set-up also belongs in `OnRequestTargets`, so `verify_change` leaves it to be run when asked.
 
 ---
 
@@ -242,9 +268,10 @@ TAutomationServer.RegisterCommand( 'myapp_state',
 
 ## Tests
 
-`Tests\gllAutomationServerTests.dproj` — 49 DUnitX tests: 33 end-to-end over loopback, plus 16 of gllIdeAutomation's pure rules (`TestGllIdeAutomationRules`, compiling `..\gllIdeAutomation\src\gllIdeAutomation.Rules.pas` from source). The end-to-end ones cover the command registry, the envelope contract, addressing (paths, `Ambiguous`, docked and synthetic names), property paths, `keys`, and screenshot render mode (an off-screen control's own colour, a cropped `TLabel`, a whole form with its children, `maxWidth`). The four screenshot tests ignore themselves in Session 0, so through GITLAKMCP's `test_run` (a service) expect 18 passed / 4 ignored; run the exe from a desktop session for 22. The test project links this package's DCUs from `..\37.0\<Platform>\<Config>`, so **build the package first**. Mutation-proved on 2026-10-13: dropping the Shift state from typed text and resolving an ambiguous name to its first match each turned exactly one test red; rendering into a 24-bit bitmap turned the three pixel-checking screenshot tests red.
+`Tests\gllAutomationServerTests.dproj` — 85 DUnitX tests ( 2026-10-31 ). `TestGllAutomationClient` (18) drives a second copy of the test exe, started with `/CLIENTTARGET` as a small target app: launch, the commands, error codes, a raising handler, a modal dialog read and answered, screenshots to a path, `close`, `Attach`, an app that exits early or never advertises, and the trust checks on planted discovery files; four hand mutations ( the `HandlerRaised` check, the port-ownership check, `close`'s `MainForm.Close`, the absolute-path rule ) each turned its own test red.  The rest predate it: 33 end-to-end over loopback, plus 16 of gllIdeAutomation's pure rules (`TestGllIdeAutomationRules`, compiling `..\gllIdeAutomation\src\gllIdeAutomation.Rules.pas` from source). The end-to-end ones cover the command registry, the envelope contract, addressing (paths, `Ambiguous`, docked and synthetic names), property paths, `keys`, and screenshot render mode (an off-screen control's own colour, a cropped `TLabel`, a whole form with its children, `maxWidth`). The four screenshot tests ignore themselves in Session 0, so through GITLAKMCP's `test_run` (a service) expect 18 passed / 4 ignored; run the exe from a desktop session for 22. The test project links this package's DCUs from `..\37.0\<Platform>\<Config>`, so **build the package first**. Mutation-proved on 2026-10-13: dropping the Shift state from typed text and resolving an ambiguous name to its first match each turned exactly one test red; rendering into a 24-bit bitmap turned the three pixel-checking screenshot tests red.
 
 ## Related
 
 - `D:\GITLAKMCP\src\Tools\GitLAKMCP.Tool.AppAutomation.pas` — the agent-side tools.
+- `gllAutomationServer.Client.pas` — the test-side client and the shared transport.
 - `gllIdeAutomation\` in this repository — the IDE host and its registered commands.

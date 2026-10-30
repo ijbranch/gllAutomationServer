@@ -43,7 +43,8 @@ uses
   DUnitX.TestFramework,
   TestGllAutomationServer in 'TestGllAutomationServer.pas',
   gllIdeAutomation.Rules in '..\gllIdeAutomation\src\gllIdeAutomation.Rules.pas',
-  TestGllIdeAutomationRules in 'TestGllIdeAutomationRules.pas';
+  TestGllIdeAutomationRules in 'TestGllIdeAutomationRules.pas',
+  TestGllAutomationClient in 'TestGllAutomationClient.pas';
 
 // The project resource carries the embedded VCL style; without it the runner stops with exit code 251.
 {$R *.res}
@@ -54,6 +55,9 @@ var
   Logger: ITestLogger;
   NUnitLogger: ITestLogger;
 begin
+  // Started by the client tests as their target app: run as that, not as the suite.
+  if RunClientTargetIfAsked then
+    Exit;
   try
     // The keys tests post messages to Application.Handle; make sure the VCL application exists.
     Application.Initialize;

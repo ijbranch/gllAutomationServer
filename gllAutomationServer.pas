@@ -234,7 +234,8 @@ uses
   //  Winapi.ShlObj + Winapi.KnownFolders resolve the REAL Desktop rather than assuming
   //  %USERPROFILE%\Desktop; IdIOHandler + IdExceptionCore give the request-line size policy.
   Winapi.ShlObj, Winapi.KnownFolders, Winapi.ActiveX,
-  IdTCPServer, IdContext, IdGlobal, IdException, IdIOHandler, IdExceptionCore;
+  IdTCPServer, IdContext, IdGlobal, IdException, IdIOHandler, IdExceptionCore,
+  gllAutomationServer.Client;
 
 const
   /// <summary>First loopback port tried when binding the listener; the constructor scans upward from here.</summary>
@@ -242,7 +243,7 @@ const
   /// <summary>Number of consecutive ports probed from <c>AUTOMATION_PORT_BASE</c> before the bind attempt is abandoned.</summary>
   AUTOMATION_PORT_SPAN = 200; // ports to try before giving up
   /// <summary>Wire-protocol/feature version reported by the <c>ping</c>/<c>info</c> command's <c>server</c> field; bump when commands change.</summary>
-  SERVER_VERSION    = '0.13'; // + click_at, drop_files, dialogs hwnd/outcome/clickable/modal/texts · 0.12: screenshot name/form render, maxWidth · 0.11: reachable/synthetic/path names, dotted props · 0.10: keys · 0.9: registered commands · 0.8: click count/stoppedReason · set changed/previous
+  SERVER_VERSION    = '0.14'; // + screenshot path, the Client unit · 0.13: click_at, drop_files, dialogs hwnd/outcome/clickable/modal/texts · 0.12: screenshot name/form render, maxWidth · 0.11: reachable/synthetic/path names, dotted props · 0.10: keys · 0.9: registered commands · 0.8: click count/stoppedReason · set changed/previous
   /// <summary>Upper bound on <c>click</c>'s <c>count</c> (a mistyped count must not lock the UI thread for minutes).</summary>
   CLICK_COUNT_MAX   = 1000;
   /// <summary>Upper bound on the property list returned with a <c>NoProp</c> failure; the reply is read by an agent, so it stays bounded.</summary>
@@ -258,8 +259,8 @@ const
   // Fixed, account-independent discovery dir so the agent (which may resolve a
   // different %TEMP%, e.g. a service) and the app always agree. The MCP side
   // can override via settings.ini [Automation] DiscoveryDir.
-  /// <summary>Fixed directory holding per-PID discovery files so an external agent and the app always agree on it regardless of account or %TEMP%.</summary>
-  DISCOVERY_DIR     = 'C:\ProgramData\GITLAK\Automation';
+  /// <summary>Fixed directory holding per-PID discovery files so an external agent and the app always agree on it regardless of account or %TEMP%; defined once, in the client unit that reads them.</summary>
+  DISCOVERY_DIR     = AUTOMATION_DISCOVERY_DIR;
 
   //  the discovery file carries the session TOKEN, which is the only thing standing
   //  between a local user and a server that can drive the UI and write datasets. The default
@@ -301,6 +302,8 @@ type
     FPort: Word;
     /// <summary>Full path of this process's discovery file.</summary>
     FDiscoveryPath: string;
+    /// <summary>Set to 1 by <c>close</c> on the main thread; the worker that wrote its reply clears it and only then queues the close, so the reply is never lost to the app's exit.</summary>
+    FCloseRequested: Integer;
     /// <summary>Indy <c>OnConnect</c> handler: applies this connection's request-line size policy (worker thread).</summary>
     /// <param name="AContext">The Indy connection context.</param>
     procedure DoConnect( AContext: TIdContext );
@@ -811,7 +814,20 @@ begin
   if sLine = '' then Exit;
 
   var sResp         := HandleLine( sLine );
-  AContext.Connection.IOHandler.WriteLn( sResp, IndyTextEncoding_UTF8 );
+  try
+    AContext.Connection.IOHandler.WriteLn( sResp, IndyTextEncoding_UTF8 );
+  finally
+    //  close's reply is on the wire (or the caller has gone): only now may the app start closing
+    if TInterlocked.Exchange( FCloseRequested, 0 ) = 1 then
+      TThread.Queue( nil,
+        procedure
+        begin
+          if Assigned( Application.MainForm ) then
+            Application.MainForm.Close
+          else
+            Application.Terminate; // ends Application.Run
+        end );
+  end;
 
 end;
 
@@ -3656,6 +3672,38 @@ begin
 
 end;
 
+/// <summary>Chooses the file a <c>screenshot</c> is written to: the request's <c>path</c>, or a new name on the Desktop.</summary>
+/// <param name="AReq">The request; its optional <c>path</c> is the PNG to write, replacing any file already there.</param>
+/// <param name="AAppName">The app name, which starts a Desktop file's name.</param>
+/// <returns>The full path of the PNG to write.</returns>
+/// <remarks>
+///   A <c>path</c> lets an unattended suite keep its images beside its results, where the Desktop default
+///   would leave one there per run (0.14).  It must be a local drive path ( <c>X:\...</c> ), end in
+///   <c>.png</c> and name a folder that exists: a relative name would resolve against the APP's current
+///   directory, not the caller's; a UNC or device path would have the app connect somewhere in its own name;
+///   and the folder is not created, so a mistyped one fails here instead of scattering images.
+/// </remarks>
+/// <exception cref="EAutoError">Code <c>BadPath</c>: <c>path</c> is not a local drive path, not a <c>.png</c>, or its folder does not exist.</exception>
+function ScreenshotPath( AReq: TJSONObject; const AAppName: string ): string;
+begin
+
+  Result            := AReq.GetValue<string>( 'path', '' );
+  if Result = '' then
+    Exit( Format( '%s\%s-%u.png', [ DesktopFolder, AAppName, GetTickCount64 ] ) );
+
+  //  a local drive path, "X:\...", and nothing else: "C:x.png" is relative to the app's directory on C:,
+  //  and a UNC or device path ( "\\host\share", "\\?\", "\\.\" ) would make the app open a connection or
+  //  a device in its own name
+  if ( Length( Result ) < 4 ) or not CharInSet( Result[ 1 ], [ 'A'..'Z', 'a'..'z' ] ) or ( Result[ 2 ] <> ':' ) or
+    ( Result[ 3 ] <> '\' ) then
+    raise EAutoError.CreateCode( 'BadPath', Format( 'path "%s" is not an absolute local path ( X:\... )', [ Result ] ) );
+  if not SameText( ExtractFileExt( Result ), '.png' ) then
+    raise EAutoError.CreateCode( 'BadPath', Format( 'path "%s" does not end in .png', [ Result ] ) );
+  if not TDirectory.Exists( ExtractFileDir( Result ) ) then
+    raise EAutoError.CreateCode( 'BadPath', Format( 'the folder of "%s" does not exist', [ Result ] ) );
+
+end;
+
 /// <summary>Picks this process's most relevant window to capture: an active modal dialog (owned + enabled) if one is up, else the largest visible top-level form. The hidden <c>TApplication</c> window is ignored. Background-thread safe (pure Win32).</summary>
 /// <returns>The chosen window handle, or <c>0</c> if none.</returns>
 function FindAppWindow: HWND;
@@ -3821,7 +3869,7 @@ begin
     begin
       Result        := TControl( AutoResolveComp( AReq, AutoResolveForm( AReq ) ) );
     end,
-    AReq.GetValue<Integer>( 'maxWidth', 0 ), Format( '%s\%s-%u.png', [ DesktopFolder, AAppName, GetTickCount64 ] ) );
+    AReq.GetValue<Integer>( 'maxWidth', 0 ), ScreenshotPath( AReq, AAppName ) );
 
 end;
 
@@ -3940,9 +3988,9 @@ end;
 ///   The capture thread is set per-monitor DPI-aware so it grabs native resolution.
 ///   With a <c>"name"</c>, or a <c>"form"</c> and no <c>"area"</c>, it renders that
 ///   control or form instead (see <c>AutoCmdRender</c>). <c>"maxWidth"</c> scales any
-///   of them down proportionally. Writes a PNG to the user's Desktop.
+///   of them down proportionally. Writes a PNG to <c>"path"</c>, or else to the user's Desktop.
 /// </summary>
-/// <param name="AReq">The request object (<c>area?</c>, <c>form?</c>, <c>name?</c>, <c>maxWidth?</c>).</param>
+/// <param name="AReq">The request object (<c>area?</c>, <c>form?</c>, <c>name?</c>, <c>maxWidth?</c>, <c>path?</c>).</param>
 /// <param name="AAppName">The app name, used in the PNG filename.</param>
 /// <returns><c>{ path, width, height, area }</c>, plus <c>target</c> in render mode and <c>sourceWidth</c> / <c>sourceHeight</c> when scaled.</returns>
 /// <remarks>
@@ -4005,7 +4053,7 @@ begin
     //  %USERPROFILE%\Desktop and drop the PNG into a folder the user never looks at, while
     //  reporting success. GetTickCount64 because the 32-bit counter wraps every 49 days and
     //  the tick is the only thing keeping the filenames apart.
-    var sPath       := Format( '%s\%s-%u.png', [ DesktopFolder, AAppName, GetTickCount64 ] );
+    var sPath       := ScreenshotPath( AReq, AAppName );
 
     var iW, iH: Integer;
     if not CaptureRect( rc, sPath, iMaxWidth, iW, iH ) then
@@ -4067,6 +4115,26 @@ begin
       else
         oRes.AddPair( 'mainForm', TJSONNull.Create );
       oRes.AddPair( 'server', SERVER_VERSION );
+    end
+    else if SameText( sCmd, 'close' ) then
+    begin
+      //  (0.14) closes the app through its own close path - MainForm.Close, so OnCloseQuery and
+      //  OnClose run, or Application.Terminate with no main form. Only flagged here: DoExecute
+      //  queues the close after it has written this reply, so the reply cannot be lost to the
+      //  app's exit. A console host has no TApplication window for a client to post WM_CLOSE to.
+      //  Refused in the IDE ( bds.exe ), which ide_quit closes; not by ModuleIsPackage, which is
+      //  also True in an ordinary exe built with runtime packages.
+      if SameText( ExtractFileName( ParamStr( 0 ) ), 'bds.exe' ) then
+        raise EAutoError.CreateCode( 'HostedInIde', 'close is refused inside the IDE ( use ide_quit )' );
+      var oRes      := TJSONObject.Create;
+      Result.AddPair( 'ok', TJSONBool.Create( True ) );
+      Result.AddPair( 'result', oRes );
+      oRes.AddPair( 'closing', TJSONBool.Create( True ) );
+      if Assigned( Application.MainForm ) then
+        oRes.AddPair( 'mainForm', Application.MainForm.Name )
+      else
+        oRes.AddPair( 'mainForm', TJSONNull.Create );
+      TInterlocked.Exchange( FCloseRequested, 1 );
     end
     else if SameText( sCmd, 'tree' ) then
     begin

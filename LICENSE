@@ -13,5 +13,19 @@ Until 2026-10-13 parts of this code were published under the MIT Licence (gllIde
 a public repository until that date). Copies obtained under that licence before then keep the
 rights it granted; nothing in this repository after that date is offered under it.
 
+Third-party portions: GExperts' GxInspect
+
+Five routines in gllAutomationServer.pas - WndCanBeClicked, WndIsModal, ClickOutcome,
+WindowAtControlPoint and BuildDropHandle - are adapted from GExperts' GxInspect
+(host\GxInspect_Server.pas, svn r6031) by Thomas Mueller. They are NOT covered by the terms
+above: they remain subject to the GExperts licence (GExperts' Documentation\License.txt), which
+requires a derived work to be distributed under a licence compatible with the Open Source
+Definition.
+
+Permission to use and distribute those portions under the terms above was requested from Thomas
+Mueller on 2026-10-31. Until it is given, or the portions are replaced by our own code, this
+repository is not to be published, and builds containing them are not to be distributed outside
+GITLAK Software. His answer is to be recorded here.
+
 THIS SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED. IN NO EVENT
 SHALL THE AUTHOR BE LIABLE FOR ANY DAMAGES ARISING IN CONNECTION WITH THE USE OF THIS SOFTWARE.
