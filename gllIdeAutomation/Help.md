@@ -10,7 +10,7 @@ It targets **Delphi 13 / RAD Studio 37.0** only, VCL, **Win32 + Win64**: the uni
 with a `{$MESSAGE FATAL}` below `CompilerVersion 37.0` (until 2026-10-13 they carried a 10.3 Rio floor
 and a `{$LIBSUFFIX}` ladder, from when the package was public). Proprietary, in-house.
 
-This file is the **lookup** document for what this package adds: the gate, the 22 commands it
+This file is the **lookup** document for what this package adds: the gate, the 38 commands it
 registers, their error codes, and the IDE-specific failures with their exact text. The automation
 server itself (transport, discovery, addressing, the built-in commands and their error codes,
 threading, `keys`) is the runtime package `gllAutomationServer`, documented in
@@ -34,15 +34,16 @@ the `gllAutomationServer` runtime package.
 ### What it uses from `gllAutomationServer`
 
 The server is its own package, at the root of this repository, `D:\gllAutomationServer` (unit
-`gllAutomationServer`, package version 1.0.0.0, wire protocol version `0.12`), which this package
+`gllAutomationServer`, package version 1.0.0.0, wire protocol version `0.13`), which this package
 `requires`. Its full API is in `D:\gllAutomationServer\Help.md`; the parts used here:
 
 | Member | Used for |
 |---|---|
 | `TAutomationServer.Start( const AAppName: string; ADisableIdleTimers: Boolean = True )` | Called by the starter as `Start( APP_NAME, False )`. `False` leaves the IDE's idle timers alone: they belong to its plug-ins. |
 | `TAutomationServer.Stop` | Called by the starter's `finalization`; removes the discovery file. |
-| `TAutomationServer.RegisterCommand` / `UnregisterCommand` | The 22 commands of `gllIdeAutomation.IdeCommands`. Built-in commands are matched first, so a registered name can never shadow one. |
+| `TAutomationServer.RegisterCommand` / `UnregisterCommand` | The 38 commands of `gllIdeAutomation.IdeCommands`. Built-in commands are matched first, so a registered name can never shadow one. |
 | `TAutomationServer.ResolveForm( ARequest: TJSONObject ): TForm` / `ResolveComponent( ARequest: TJSONObject; AForm: TForm ): TComponent` | `tree_text` resolves `form` and `name` exactly as the built-ins do, so it takes dotted paths and synthetic names and answers `NoForm` / `NoComp` / `Ambiguous` the same way. |
+| `TAutomationServer.RenderControl( AResolve, AMaxWidth, AFileStem )` (0.13) | `ide_designer_screenshot` renders the designed form, which the built-in addressing cannot name, exactly as `screenshot` renders a named control. |
 | `EAutoError` | How a registered command fails with a code of its own. |
 
 ### `gllIdeAutomation.Starter`
@@ -81,7 +82,7 @@ alive before trusting it. The server sweeps dead PIDs' files on start.
 The built-in commands are `ping` / `info`, `tree`, `get`, `set`, `click`, `action`, `keys`,
 `dialogs`, `screenshot`, `dataset`, `dataset_op`, `field_get` and `field_set`. Inside the IDE,
 `ping` reports `version` as `bds.exe`'s, `package` as the `gllAutomationServer` BPL's (`1.0.0.0`)
-and `server` as the protocol version (`0.12`). Since 0.11 a component `name` may be a dotted path
+and `server` as the protocol version (`0.13`). Since 0.11 a component `name` may be a dotted path
 (`fraA.edtTown`) or a synthetic name for an unnamed component (`@TButton#2`), reaches frame-owned
 and docked controls, and a name that matches several is `Ambiguous`; `prop` may be a dotted path
 (`Font.Size`) and `TStrings` read and write as text.
@@ -96,8 +97,8 @@ stopped, and they wait on the worker thread, not the VCL thread.
 
 ### Registered commands
 
-`src\gllIdeAutomation.IdeCommands.pas` registers 22 commands through
-`TAutomationServer.RegisterCommand`: `tree_text` and the 21 ToolsAPI commands. `COMMAND_NAMES`
+`src\gllIdeAutomation.IdeCommands.pas` registers 38 commands through
+`TAutomationServer.RegisterCommand`: `tree_text` and the 37 ToolsAPI commands. `COMMAND_NAMES`
 lists them, `tree_text` first. To a caller they are no different from built-ins.
 
 #### `tree_text`
@@ -112,18 +113,37 @@ Its handler, `CmdTreeText`, runs on the main thread; the reader is
 #### ToolsAPI commands
 
 Chosen after reading GxInspect's README, whose measured findings shaped several of them; each is
-cited in the unit. The code is written here against `ToolsAPI.pas`, not taken from GxInspect (MPL).
+cited in the unit. Until 2026-10-30 the code was written here against `ToolsAPI.pas`, none taken from
+GxInspect. The commands added that day port its self-contained routines where they fit (the
+disassembler and its event-shape check, the form-view swap, the two-pass form lookup; svn r6031) and
+reimplement the rest; `src\gllIdeAutomation.IdeCommands.pas` and `src\gllIdeAutomation.Rules.pas`
+credit each portion in their headers. The pure rules (argument readers, file, action and name
+matching) live in `gllIdeAutomation.Rules`, which needs no IDE and is tested by the server's suite.
 
 | `cmd` | Request fields | Result |
 |---|---|---|
 | `ide_modified` | - | `{ count, modified:[ { file, kind, untitled } ] }` - everything that would make closing stop and ask. `kind` is `buffer` (an edited file) or `options` (changed project options); `untitled` means it has never been saved. An unsaved project group the IDE invented is left out: it never asks about one |
-| `ide_quit` | `mode?` | `{ mode, closing:true, saved? \| discarded? }`; the IDE closes about 150 ms after the answer. `mode` is `refuse` (default: fail with `Modified` if anything is unsaved), `save`, `discard` or `ask`. **Script with `discard`**, not `save`: the IDE dirties files merely by opening them |
+| `ide_quit` | `mode?`, `terminate?` | `{ mode, closing:true, saved? \| discarded?, terminated? }`; the IDE closes about 150 ms after the answer. `mode` is `refuse` (default: fail with `Modified` if anything is unsaved), `save`, `discard` or `ask`. **Script with `discard`**, not `save`: the IDE dirties files merely by opening them. While anything is being debugged every mode but `ask` fails with `Debugging`, since closing would ask whether to end the session; `terminate:true` ends each process FIRST and waits up to 15 s for the debugger to let go (`TerminateFailed` if it does not, with nothing closed), so it runs on the worker thread. An unknown `mode` is `BadRequest` before anything else is looked at |
 | `ide_menu` | `path?`, `depth?` | No `path`: `{ items:[ … ] }` for the menu bar. With one: that item, and its branch `depth` levels deep (default 1, at most 6). Each item: `{ name, caption, action?, enabled, visible, checked, separator, count, items? }` |
 | `ide_menu_click` | `path` | `{ clickScheduled:true, item }`. The click happens after the answer, so a command that opens a dialog does not hold it up; ask `dialogs` next |
+| `ide_actions` | `filter?`, `max?` | `{ matched, listed, actions:[ { name, caption, category, enabled, visible, checked, shortcut } ] }` - the IDE's action list, filtered by part of the name, the caption (without `&`) or the category; `max` defaults to 500, at most 5000. `enabled` is only as fresh as the IDE's last idle pass |
+| `ide_action` | `name` | `{ executeScheduled:true, action }`. Brought up to date and refused when disabled; executed just after the answer, as `ide_menu_click` clicks. Also finds the actions the IDE keeps in its own data modules (`DebugCommands`), which `ide_actions` cannot list |
+| `ide_open_file` | `file` | `{ opened, current, modified }`. A full path; the IDE is not left in front of whatever had the focus. `modified` is often true straight away: opening upgrades a project and adds or drops form defaults |
+| `ide_modules` | - | `{ current, count, modules:[ { file, kind, modified, current, editors:[ { file, kind, modified } ] } ] }`. `kind` is `projectGroup`, `project` or `module`; an editor's is `source`, `form` or `other` |
+| `ide_close_module` | `file`, `mode?` | `{ closed, mode, saved?, discarded? }`. `mode` is `refuse` (default: fail with `Modified` if anything is unsaved, listed in `error.data`), `save` or `discard`. A project or project group closes its open units with it, so their unsaved changes count (saved, or each force-closed first, by the mode), and while anything is being debugged closing one is refused with `Debugging` |
+| `ide_save` | `file?` | `{ saved, wasModified }` - one module, a form's unit and `.dfm` together |
+| `ide_projects` | - | `{ group, active, count, projects:[ { file, active } ] }`. Ask this, not the main window's caption, which lags a switch |
+| `ide_set_project` | `project` | `{ active, previous, note? }`. `note` warns that the debug_* commands follow the active project |
+| `ide_designer_show` | `file?` | `{ file, form, root, class }` - brings the form up in the designer, opening the file first when it exists and is not open |
+| `ide_designer_screenshot` | `file?`, `maxWidth?` | As the server's render-mode `screenshot`, plus `file`: the designed form rendered to a PNG on the Desktop, correct even when covered. Show it first |
+| `ide_designer_selection` | `file?` | `{ file, form, count, selected:[ { name, class } ] }`. The form itself selected counts as nothing selected |
+| `ide_designer_select` | `file?`, `names` | The new selection, as `ide_designer_selection`. `names` is an array or one string separated by commas; all are found before anything is selected |
+| `ide_designer_deselect` | `file?` | The selection afterwards (`count` 0): the form itself is selected, which is the designer's "nothing" |
+| `ide_view_as_text` / `ide_view_as_form` | `file?` | `{ file, view, switched, note? }` - the IDE's Alt+F12. While a form is shown as text its unit is closed and the `.dfm` is a module of its own, so name the `.dfm` |
 | `debug_state` | - | `{ activeProject, processes:[ { pid, exe, state, current } ], current:{ state, pid, exe, location? } }` |
 | `debug_attach` | `pid`, `pause?` | `{ requested:true, pid, pause }` - answered **before** the attach happens; `debug_state` confirms it. Reset in the IDE then detaches rather than kills |
 | `debug_detach` | - | `{ detached:true, pid }` - the process keeps running |
-| `debug_pause` | - | `{ requested:true, pid }` - answered before it has stopped |
+| `debug_pause` | - | `{ requested:true, pid }` - answered before it has stopped. **Afterwards the current thread is the debugger's break-in thread** (`ntdll.DbgUiRemoteBreakin`): `debug_step` refuses it with `BreakInThread`, so `debug_set_thread` to one of the program's threads first. It is recognised by `DbgUiRemoteBreakin` among the top three frames; a program thread stopped in `DebugBreak()` (in `DbgBreakPoint`, but not called from there) is the program's own and is stepped |
 | `debug_run` | `wait?` | As `debug_step`. `wait` defaults to 0: answer at once |
 | `debug_step` | `mode?`, `wait?` | `{ stopped, waitedMs, state, pid, exe, location:{ thread, file, line, … } }` - answered **once the process has stopped again**, saying where. `stopped:false` means `wait` (default 10000 ms) ran out first |
 | `debug_run_to` | `file`, `line`, `wait?` | As `debug_step`. `file` is a path, or a file name open in the IDE |
@@ -134,8 +154,9 @@ cited in the unit. The code is written here against `ToolsAPI.pas`, not taken fr
 | `debug_registers` | `thread?` | `{ thread, bits, registers:{ rax … r15, rip, eflags } }` (or the 32-bit set in the 32-bit IDE), as hex |
 | `debug_memory` | `address`, `count?` | `{ address, requested, read, hex, stoppedAt?, reason? }`. `address` is a number, `$hex` or `0xhex`; `count` defaults to 64, at most 4096. Read a page at a time, so a range running into unreadable memory returns what it could |
 | `debug_eval` | `expr`, `thread?`, `sideEffects?` | `{ expr, result, canModify, address, size }` - the IDE's own evaluator, so the text is what the IDE shows |
-| `debug_breakpoints` | - | `{ breakpoints:[ { file, line, enabled, condition, passCount } ] }` - source breakpoints |
-| `debug_breakpoint_set` | `file`, `line`, `condition?`, `passCount?`, `enabled?` | The breakpoint. Updates the one already on that line rather than adding a second. `enabled` defaults to true |
+| `debug_disasm` | `address?`, `count?`, `thread?` | `{ address, thread, bits, count, instructions:[ { address, size, text, current, label?, source?:{ file, line, text } } ], notes, stoppedAt?, reason? }` - what the CPU window shows, in the IDE's own notation, from the instruction pointer unless `address` (as for `debug_memory`) is given; `count` defaults to 20, at most 1000. Needs a CPU window opened once (`ide_action DebugCPUCommand`) |
+| `debug_breakpoints` | - | `{ breakpoints:[ breakpoint ] }` - source breakpoints, each as `debug_breakpoint_set` returns it |
+| `debug_breakpoint_set` | `file`, `line`, `enabled?`, `condition?`, `passCount?`, `group?`, `doBreak?`, `logMessage?`, `evalExpression?`, `logResult?`, `enableGroup?`, `disableGroup?`, `handleExceptions?`, `ignoreExceptions?`, `stackFramesToLog?`, `threadCondition?` | `{ file, line, enabled, condition, passCount, curPassCount, group, doBreak, logMessage, evalExpression, logResult, enableGroup, disableGroup, handleExceptions, ignoreExceptions, stackFramesToLog, threadCondition, validHere?, note? }`. Updates the one already on that line rather than adding a second; an argument left out leaves that property alone - `enabled` too, so changing the condition of a disabled breakpoint leaves it disabled; all are checked before anything is created. A NEW breakpoint is enabled unless `enabled:false`. `validHere` (while debugging) says whether the line has code; a line without code is only rejected once the process runs, which `note` says |
 | `debug_breakpoint_delete` | `file`, `line` | `{ deleted:true, file, line }` |
 
 **The debugger commands act on the debugger's CURRENT process, and that follows the ACTIVE
@@ -168,6 +189,11 @@ measured). Make the project that was run active again and everything comes back.
 | `mode` | `debug_step` | `over` (default), `into`, `out` (run until the function returns), `toSource`, `instInto`, `instOver`. Anything else → `BadRequest`. |
 | `path` | `ide_menu`, `ide_menu_click` | Steps separated by `\|`, from the menu bar down. Each step is a component name or a caption; a caption is compared without its `&` and without case, and matches by its beginning when nothing matches it whole. A beginning that matches several items → `AmbiguousMenuItem`. Names are the dependable choice in a localised IDE; what the IDE generates (Reopen, Desktops, the user's tools) has no name and can only be named by caption. |
 | `wait` | `debug_run`, `debug_step`, `debug_run_to` | Milliseconds, clamped to `0`..`120000`. |
+| `mode` | `ide_close_module` | `refuse` (default), `save`, `discard`. Anything else → `BadRequest`. |
+| `file` | `ide_close_module`, `ide_save`, the `ide_designer_*` and `ide_view_as_*` commands | A full path; a file name alone, matched in any folder; or `.` / nothing for the module in front (not for `ide_close_module`). The designer and view commands also match the unit and its `.dfm` without their extensions, the exact name first, so either names the form whichever is open. Case is ignored. A bare name that matches several open files is refused with `Ambiguous`, listing them (give the path); a relative path (`src\Unit1.pas`) is `BadRequest`, since it would be resolved against the IDE's current folder. Also for `ide_set_project`'s `project`; `ide_open_file` takes a full path only. |
+| `names` | `ide_designer_select` | A JSON array of component names, or one string separated by commas. An empty or repeated name → `BadRequest`. |
+| `count` | `debug_disasm` | Instructions, default `20`, clamped to `1`..`1000`. |
+| `max` | `ide_actions` | Actions listed, default `500`, clamped to `1`..`5000`. |
 
 The built-in commands' vocabularies (`click` `mode` and `count`, `dataset_op` `op`, `keys` chords
 and `timeoutMs`, `screenshot` `area`) are in `D:\gllAutomationServer\Help.md`.
@@ -179,7 +205,7 @@ do not.
 
 | Registered `actWorkerThread` | Registered `actMainThread` (marshalled to the VCL thread) |
 |---|---|
-| `debug_run`, `debug_step`, `debug_run_to` | `tree_text` and every other `ide_*` / `debug_*` command |
+| `debug_run`, `debug_step`, `debug_run_to`, `ide_designer_screenshot`, `ide_quit` | `tree_text` and every other `ide_*` / `debug_*` command |
 
 The worker-thread three wait for the debugger to stop the process, and synchronise each step onto
 the main thread themselves. Which built-ins run on the worker thread (`dialogs`, `screenshot`, and
@@ -192,7 +218,7 @@ the main thread themselves. Which built-ins run on the worker thread (`dialogs`,
 Every failure returns `{ id, ok:false, error:{ code, message } }` with a stable `code`. The
 envelope and built-in codes (`Unauthorised`, `UnknownCmd`, `RequestTooLong`, `Internal`, `NoProp`,
 `Ambiguous`, `NotObject`, `NilObject`, `NotScalar`, `ReadOnlyProp`, the `click` / `keys` / dataset
-codes and the rest) are listed in `D:\gllAutomationServer\Help.md`. The codes the 22 registered
+codes and the rest) are listed in `D:\gllAutomationServer\Help.md`. The codes the 38 registered
 commands raise, from their `EAutoError.CreateCode` / `CreateCodeData` sites:
 
 | Code | Raised when |
@@ -223,6 +249,24 @@ commands raise, from their `EAutoError.CreateCode` / `CreateCodeData` sites:
 | `Unreadable` | `debug_memory` could not read even the first byte |
 | `EvalError` / `EvalDeferred` / `EvalBusy` | `debug_eval` - the evaluator's error text; it had to call into the process and has no result yet; it is busy |
 | `BreakpointFailed` / `NoBreakpoint` | the debugger set no breakpoint; there is none on that line to delete |
+| `IdeAsking` | `debug_run`, `debug_step`, `debug_run_to` while the IDE shows a modal prompt (its exception notification, say): a run or step does nothing until it is answered. `error.data` is the prompt's caption; answer it with `dialogs` |
+| `BreakInThread` | `debug_step` with the debugger's break-in thread current (after `debug_pause`); `debug_set_thread` first |
+| `Debugging` | `ide_quit` (any mode but `ask`) while a process is being debugged, without `terminate:true`; `ide_close_module` on a project or group while anything is being debugged |
+| `TerminateFailed` | `ide_quit` with `terminate:true` - processes still debugged 15 s after being ended; nothing was closed |
+| `Ambiguous` | also a bare file name that answers to several open files; `error.data` lists them |
+| `NoModule` | nothing open matches the `file` given |
+| `NoForm` | the module has no form, or its form is shown as text (the message says which) |
+| `NoDesigner` | the form is not loaded in the designer |
+| `FormOpenAsText` | `ide_open_file` on a unit whose `.dfm` is open as text - the IDE would raise `EModuleAbort` and open it anyway |
+| `OpenFailed` | the IDE declined, or raised, opening a file; the message carries its text |
+| `NoFile` | also `ide_open_file` - the file does not exist |
+| `NoAction` / `ActionDisabled` | `ide_action` - no action of that name; it is disabled just now |
+| `NoComp` | `ide_designer_select` - names not on the form, listed in `error.data`; nothing was selected |
+| `NoCpuWindow` | `debug_disasm` - no CPU window has been opened; `ide_action DebugCPUCommand` |
+| `NoAddress` | `debug_disasm` with no `address` and an unreadable instruction pointer |
+| `Undisassemblable` | `debug_disasm` - not even one instruction could be disassembled |
+| `SignatureMismatch` | also `debug_disasm` - the CPU window's `OnDisassemble` is not the declaration it would be called with; nothing was called |
+| `NotShowing` | `ide_designer_screenshot` - the designer is not on screen |
 
 Any other exception escaping a registered handler comes back as the server's `Internal`. A
 connection closed with no reply is a genuine fault and worth reporting; the one deliberate close is
@@ -245,7 +289,7 @@ nothing to merge from and no divergence to justify.
   own copy; that copy is gone, and with it any need to keep two copies in step.
 - **What is here is what only the IDE needs:** the gate (`gllIdeAutomation.Starter`), `tree_text`
   (the reader in `gllIdeAutomation.TreeText`, the `CmdTreeText` handler in
-  `gllIdeAutomation.IdeCommands`) and the 21 ToolsAPI commands (`gllIdeAutomation.IdeCommands`). All 22 reach the server only through
+  `gllIdeAutomation.IdeCommands`) and the 37 ToolsAPI commands (`gllIdeAutomation.IdeCommands`). All 38 reach the server only through
   `TAutomationServer.RegisterCommand`, and `tree_text` resolves its target through the server's
   public `ResolveForm` / `ResolveComponent`, so its wire behaviour is that of a built-in.
 - **`tree_text` lives here** because no application we ship carries a virtual tree. The technique

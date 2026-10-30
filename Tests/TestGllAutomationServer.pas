@@ -45,8 +45,8 @@ interface
 
 uses
   DUnitX.TestFramework,
-  System.JSON,
-  Vcl.Forms, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.Imaging.pngimage;
+  System.JSON, System.Classes, System.Types,
+  Vcl.Forms, Vcl.Controls, Vcl.StdCtrls, Vcl.ExtCtrls, Vcl.Imaging.pngimage;
 
 type
   /// <summary>End-to-end tests of the automation server's commands.</summary>
@@ -82,17 +82,121 @@ type
     function Send( const ACmd: string; const AArgs: string = '' ): TJSONObject;
     /// <summary>Sends one raw request line, exactly as given, and returns the raw reply line.</summary>
     /// <param name="ALine">The request line, without its terminator.</param>
+    /// <param name="ADelayMs">How long the sending thread waits before connecting, so the main thread can enter a modal loop or a busy spell first.</param>
     /// <returns>The reply line; the test fails if the connection gives none.</returns>
-    function SendLine( const ALine: string ): string;
+    function SendLine( const ALine: string; ADelayMs: Integer = 0 ): string;
+    /// <summary>As <see cref="Send"/>, the request leaving only after <paramref name="ADelayMs"/>.</summary>
+    /// <param name="ACmd">The command.</param>
+    /// <param name="AArgs">Extra request members as a JSON object text, or empty.</param>
+    /// <param name="ADelayMs">The delay before the request is sent.</param>
+    /// <returns>The reply object; the caller frees it.</returns>
+    function SendDelayed( const ACmd, AArgs: string; ADelayMs: Integer ): TJSONObject;
     /// <summary>Sends a request that must fail, and returns its <c>error.code</c>.</summary>
     /// <param name="ACmd">The command.</param>
     /// <param name="AArgs">Extra request members as a JSON object text.</param>
     /// <returns>The error code.</returns>
     function SendFail( const ACmd, AArgs: string ): string;
+  private
+    /// <summary>The first window the dialogs tests click in: a Count button and a Same button.</summary>
+    FDlgA: TForm;
+    /// <summary>The second dialogs window, with a Same button of its own, so that caption is ambiguous.</summary>
+    FDlgB: TForm;
+    /// <summary>A dialogs window that is DISABLED, as one with a modal on top is; its Blocked button is enabled in its own right.</summary>
+    FDlgC: TForm;
+    /// <summary>How often the Count button's OnClick ran.</summary>
+    FCountClicks: Integer;
+    /// <summary>How often FDlgA's Same button's OnClick ran.</summary>
+    FSameAClicks: Integer;
+    /// <summary>How often FDlgB's Same button's OnClick ran.</summary>
+    FSameBClicks: Integer;
+    /// <summary>How often the Blocked button's OnClick ran.</summary>
+    FBlockedClicks: Integer;
+    /// <summary>The panel the click_at tests click on.</summary>
+    FClickPanel: TPanel;
+    /// <summary>Where the last mouse-down on the panel landed, in its client coordinates.</summary>
+    FMousePoint: TPoint;
+    /// <summary>The shift state of the last mouse-down on the panel.</summary>
+    FMouseShift: TShiftState;
+    /// <summary>How often the panel's OnClick ran.</summary>
+    FPanelClicks: Integer;
+    /// <summary>The control the drop_files tests drop on; it accepts WM_DROPFILES.</summary>
+    FDropZone: TWinControl;
+    /// <summary>How often each of FDlgA's two Twin buttons ran, by index.</summary>
+    FTwinClicks: array[ 0..1 ] of Integer;
+    /// <summary>FDlgA's two Twin buttons, which share a caption in one window.</summary>
+    FTwins: array[ 0..1 ] of TButton;
+    /// <summary>How often the styled (non-BM_CLICK) button ran.</summary>
+    FStyledClicks: Integer;
+    /// <summary>A form shown modally by the backward-compatibility test; its OK button has ModalResult mrOk.</summary>
+    FModal: TForm;
+    /// <summary>What FModal's ShowModal returned.</summary>
+    FModalResult: Integer;
+    /// <summary>A window owned by FModalOwner, which is disabled, so it is modal as Windows shows modality.</summary>
+    FDlgD: TForm;
+    /// <summary>The disabled owner of FDlgD.</summary>
+    FModalOwner: TForm;
+    /// <summary>How often FDlgD's Same button ran.</summary>
+    FSameDClicks: Integer;
+    /// <summary>Counts a click of a Twin button; its Tag says which.</summary>
+    /// <param name="Sender">The button.</param>
+    procedure TwinClick( Sender: TObject );
+    /// <summary>Counts a click of the styled button.</summary>
+    /// <param name="Sender">The button.</param>
+    procedure StyledClick( Sender: TObject );
+    /// <summary>A handler that takes 2.5 s and then hides its window, as a slow OK does.</summary>
+    /// <param name="Sender">The button.</param>
+    procedure SlowClick( Sender: TObject );
+    /// <summary>Opens a modal form on top of FDlgA that closes itself after 2.5 s.</summary>
+    /// <param name="Sender">The button.</param>
+    procedure NestClick( Sender: TObject );
+    /// <summary>Closes the nested modal form its timer belongs to.</summary>
+    /// <param name="Sender">The timer.</param>
+    procedure NestTimer( Sender: TObject );
+    /// <summary>Counts a click of FDlgD's Same button.</summary>
+    /// <param name="Sender">The button.</param>
+    procedure SameDClick( Sender: TObject );
+    /// <summary>Counts a click of the Count button.</summary>
+    /// <param name="Sender">The button.</param>
+    procedure CountClick( Sender: TObject );
+    /// <summary>Counts a click of FDlgA's Same button.</summary>
+    /// <param name="Sender">The button.</param>
+    procedure SameAClick( Sender: TObject );
+    /// <summary>Counts a click of FDlgB's Same button.</summary>
+    /// <param name="Sender">The button.</param>
+    procedure SameBClick( Sender: TObject );
+    /// <summary>Counts a click of the Blocked button.</summary>
+    /// <param name="Sender">The button.</param>
+    procedure BlockedClick( Sender: TObject );
+    /// <summary>Records where a mouse-down on the click panel landed, and with which keys.</summary>
+    /// <param name="Sender">The panel.</param>
+    /// <param name="Button">The mouse button.</param>
+    /// <param name="Shift">The keys and buttons held.</param>
+    /// <param name="X">The point's horizontal position, in the panel's client coordinates.</param>
+    /// <param name="Y">The point's vertical position, in the panel's client coordinates.</param>
+    procedure PanelMouseDown( Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer );
+    /// <summary>Counts a click of the click panel.</summary>
+    /// <param name="Sender">The panel.</param>
+    procedure PanelClick( Sender: TObject );
+    /// <summary>
+    ///   Shows the three dialogs windows, off-screen and non-modal, FDlgC disabled.  Only the dialogs tests build
+    ///   them, so no other test meets their buttons.
+    /// </summary>
+    procedure BuildDialogs;
+    /// <summary>Lets the main thread handle what is queued for the given time: a posted click or drop arrives after its reply.</summary>
+    /// <param name="AMs">How long to pump, in milliseconds.</param>
+    procedure Pump( AMs: Integer );
+    /// <summary>A string as a JSON string literal, quotes and escapes included, for building a request.</summary>
+    /// <param name="AText">The text.</param>
+    /// <returns>The literal.</returns>
+    function JsonText( const AText: string ): string;
     /// <summary>Builds the test form: two panels that each OWN an edit named edtTown, two unnamed buttons, a memo, a plain edit, and a host panel with the docked edit parented in.</summary>
     procedure BuildForm;
   public
     /// <summary>Registers the test commands, builds the test form, starts the server and reads the token.</summary>
+    /// <exception cref="EAutoError">
+    ///   Never from Setup itself: the <c>raise</c> in its body belongs to the <c>test_registered_fail</c> handler it
+    ///   registers, which raises when a test sends that command.
+    /// </exception>
     [Setup]
     procedure Setup;
     /// <summary>Stops the server, removes the test commands and frees the test form.</summary>
@@ -189,13 +293,92 @@ type
     ///   first child of a form, so this is what tells the DWM path (frame and every child) from a degraded one.
     /// </summary>
     [Test] procedure Screenshot_OfAForm_IncludesItsChildren;
+    /// <summary>
+    ///   A dialog button is clicked ONCE.  The click used to be sent as BM_CLICK and then, because the button's window
+    ///   still existed straight afterwards (it always does: a modal form is torn down only when its loop unwinds), sent
+    ///   again as a mouse click, so a button that does not close its window ran its handler twice.  The reply now says
+    ///   what became of the click: this window stays up and enabled, so <c>unchanged</c>.
+    /// </summary>
+    [Test] procedure Dialogs_Click_IsDeliveredOnce;
+    /// <summary>A caption that matches buttons in two windows is refused as AmbiguousButton, and neither is clicked; it used to click the first found.</summary>
+    [Test] procedure Dialogs_AmbiguousCaption_IsRefused;
+    /// <summary><c>hwnd</c> narrows the search to one window, which settles an ambiguous caption: only that window's button runs.</summary>
+    [Test] procedure Dialogs_Hwnd_NarrowsTheSearch;
+    /// <summary>
+    ///   A button that is enabled in its own right but sits in a DISABLED window (what a window with a modal on top
+    ///   is) is refused as NotClickable and not clicked.  Only the button itself used to be checked, so BM_CLICK ran a
+    ///   handler a user could not have reached.
+    /// </summary>
+    [Test] procedure Dialogs_ButtonInDisabledWindow_IsNotClicked;
+    /// <summary>The listing gives every button its handle and whether it could be clicked, judged up the window chain, and every window whether it is modal.</summary>
+    [Test] procedure Dialogs_List_SaysWhichButtonsCanBeClicked;
+    /// <summary>click_at delivers a real mouse click at a point in the control's client coordinates, with the shift keys asked for and no others.</summary>
+    [Test] procedure ClickAt_ClicksAtThePoint_WithTheKeysAskedFor;
+    /// <summary>A point outside the control's client area is refused as OutsideControl, and nothing is clicked.</summary>
+    [Test] procedure ClickAt_OutsideTheControl_IsRefused;
+    /// <summary>drop_files hands the control WM_DROPFILES carrying every file, in order, and the drop point in its client coordinates.</summary>
+    [Test] procedure DropFiles_DeliversTheFilesAndThePoint;
+    /// <summary>A control with no window up its chain that accepts files is refused as NoDropTarget: Explorer could not drop on it either.</summary>
+    [Test] procedure DropFiles_WithNoDropTarget_IsRefused;
+    /// <summary>A file that does not exist is refused as NoFile before anything is dropped: Explorer drops only files that exist.</summary>
+    [Test] procedure DropFiles_MissingFile_IsRefused;
+    /// <summary>
+    ///   TAutomationServer.RenderControl, called from a registered worker-thread command, renders the control its
+    ///   resolver returns, at that control's size: what the IDE's designer screenshot relies on to reach a form the
+    ///   built-in addressing cannot name.
+    /// </summary>
+    [Test] procedure RenderControl_RendersWhatTheResolverFinds;
+    /// <summary>
+    ///   Two buttons of one caption in ONE window could never be clicked: the caption was ambiguous and <c>hwnd</c> names
+    ///   only the window.  <c>buttonHwnd</c>, which the listing reports, clicks exactly that button and no other.
+    /// </summary>
+    [Test] procedure Dialogs_ButtonHwnd_ClicksOneOfTwoTwins;
+    /// <summary>
+    ///   The outcome is judged once the click has been HANDLED, not from when it was posted: an OK whose handler takes
+    ///   2.5 s before it closes the window answers <c>gone</c>.  Judged from the post, it answered <c>unchanged</c> while
+    ///   the handler was still running, and a caller that retried clicked twice.
+    /// </summary>
+    [Test] procedure Dialogs_SlowHandler_IsJudgedAfterItRan;
+    /// <summary>A click whose handler has not run within <c>wait</c> answers <c>pending</c>, never <c>unchanged</c>, and says the click is still queued.</summary>
+    [Test] procedure Dialogs_HandlerNotRunYet_IsPending;
+    /// <summary>
+    ///   When several windows have a clickable button of the caption, the one in a MODAL window is clicked: a message
+    ///   box disables only its owner, so an OK on another open window is clickable too, and refusing would break a
+    ///   script the old code served.  Only several modal matches are refused.
+    /// </summary>
+    [Test] procedure Dialogs_SeveralMatches_ThePromptWins;
+    /// <summary>The main backward-compatibility case: OK on a VCL ShowModal dialog closes it, and the reply says <c>gone</c> and <c>dismissed:true</c>.</summary>
+    [Test] procedure Dialogs_ShowModalOk_IsGone;
+    /// <summary>A click that opens a modal on top of its window answers <c>covered</c>.</summary>
+    [Test] procedure Dialogs_ClickOpeningAModal_IsCovered;
+    /// <summary>
+    ///   A custom-drawn button that keeps "button" in its class name but is not built on the system Button class is
+    ///   clicked through the mouse messages, once, and the reply says <c>method:"mouse"</c>; a TButton says
+    ///   <c>bmClick</c>, so sending one down the mouse path is seen.
+    /// </summary>
+    [Test] procedure Dialogs_StyledButton_TakesTheMousePath;
+    /// <summary><c>modalOnly</c> lists only windows waiting for an answer, so the plain non-modal test windows are left out.</summary>
+    [Test] procedure Dialogs_ModalOnly_LeavesOutPlainWindows;
+    /// <summary>A window's static texts are listed, a VCL TStaticText included: it is built on the system Static class under a class name of its own.</summary>
+    [Test] procedure Dialogs_List_ReadsStaticTexts;
+    /// <summary><c>mainThreadBusy</c> is true while the main thread is not answering, false when it is.</summary>
+    [Test] procedure Dialogs_MainThreadBusy_SaysSo;
+    /// <summary>An <c>hwnd</c> that is no window, a child window, or another process's window is NoWindow; one that is not a number is BadRequest.</summary>
+    [Test] procedure Dialogs_BadHwnd_IsRefused;
+    /// <summary>A path with non-ASCII characters arrives intact: the drop block is UTF-16.</summary>
+    [Test] procedure DropFiles_NonAsciiPath_ArrivesIntact;
+    /// <summary>
+    ///   A second registration of a name already registered is refused, and the first still answers.  It used to replace
+    ///   the first silently, and the first provider's UnregisterCommand then removed the second's command.
+    /// </summary>
+    [Test] procedure RegisterCommand_RefusesASecondProvider;
   end;
 
 implementation
 
 uses
-  System.SysUtils, System.Classes, System.Types, System.IOUtils, System.Diagnostics, System.Generics.Collections,
-  Winapi.Windows,
+  System.SysUtils, System.IOUtils, System.Diagnostics, System.Generics.Collections,
+  Winapi.Windows, Winapi.Messages, Winapi.ShellAPI,
   Vcl.Graphics, Vcl.Themes,
   IdTCPClient, IdGlobal,
   GllDUnitX.Station,
@@ -209,7 +392,7 @@ const
   /// <summary>Name the test process registers under.</summary>
   APP_NAME        = 'gllAutomationServerTests';
   /// <summary>The wire-protocol version ping must report.</summary>
-  PROTOCOL_VERSION = '0.12';
+  PROTOCOL_VERSION = '0.13';
   /// <summary>Name of the test form, which the requests address.</summary>
   FORM_NAME       = 'AutoTestForm';
 
@@ -223,6 +406,67 @@ const
   CMD_SHADOW      = 'ping';
   /// <summary>Marker the shadowing handler would return if it ever ran.</summary>
   SHADOW_MARKER   = 'shadowed';
+
+type
+  /// <summary>A control that accepts dropped files and records the last drop, as an application's drop target does.</summary>
+  TDropZone = class( TCustomControl )
+  protected
+    /// <summary>Registers the window for WM_DROPFILES, which is what makes the shell, and drop_files, deliver to it.</summary>
+    procedure CreateWnd; override;
+    /// <summary>Reads the dropped files and the drop point, then releases the drop handle.</summary>
+    /// <param name="AMsg">The message.</param>
+    procedure WMDropFiles( var AMsg: TWMDropFiles ); message WM_DROPFILES;
+  public
+    /// <summary>The files of the last drop, in order.</summary>
+    Files: TArray<string>;
+    /// <summary>The point of the last drop, in client coordinates.</summary>
+    DropPoint: TPoint;
+  end;
+
+type
+  /// <summary>A custom-drawn button, like Ethea's TStyledButton: "button" in its class name, not built on the system Button class, so BM_CLICK does nothing to it.</summary>
+  TFakeStyledButton = class( TCustomControl )
+  protected
+    /// <summary>Draws a frame and the caption, so it is visible as a button would be.</summary>
+    procedure Paint; override;
+  end;
+
+procedure TFakeStyledButton.Paint;
+begin
+
+  Canvas.Rectangle( ClientRect );
+  Canvas.TextOut( 4, 4, Caption );
+
+end;
+
+procedure TDropZone.CreateWnd;
+begin
+
+  inherited;
+  DragAcceptFiles( Handle, True );
+
+end;
+
+procedure TDropZone.WMDropFiles( var AMsg: TWMDropFiles );
+begin
+
+  try
+    var iCount := DragQueryFile( AMsg.Drop, $FFFFFFFF, nil, 0 );
+    SetLength( Files, iCount );
+    for var iFile := 0 to Integer( iCount ) - 1 do
+    begin
+      var sName := '';
+      SetLength( sName, DragQueryFile( AMsg.Drop, iFile, nil, 0 ) );
+      DragQueryFile( AMsg.Drop, iFile, PChar( sName ), Length( sName ) + 1 );
+      Files[ iFile ] := sName;
+    end;
+    DragQueryPoint( AMsg.Drop, DropPoint );
+  finally
+    DragFinish( AMsg.Drop );
+  end;
+  AMsg.Result := 0;
+
+end;
 
 /// <summary>Whether the calling thread is the main thread.</summary>
 /// <returns>True on the main thread.</returns>
@@ -290,6 +534,18 @@ begin
   FDocked.Parent := oHost;
   FDocked.Text := 'docked';
 
+  FClickPanel := TPanel.Create( FForm );
+  FClickPanel.Name := 'pnlClick';
+  FClickPanel.Parent := FForm;
+  FClickPanel.SetBounds( 10, 300, 120, 60 );
+  FClickPanel.OnMouseDown := PanelMouseDown;
+  FClickPanel.OnClick := PanelClick;
+
+  FDropZone := TDropZone.Create( FForm );
+  FDropZone.Name := 'dropZone';
+  FDropZone.Parent := FForm;
+  FDropZone.SetBounds( 200, 300, 100, 60 );
+
   FForm.Show;
 
 end;
@@ -326,6 +582,20 @@ begin
       Result := TJSONString.Create( SHADOW_MARKER );
     end );
 
+  // DUnitX keeps one fixture instance for every test, so what a test counts starts again here.
+  FCountClicks := 0;
+  FSameAClicks := 0;
+  FSameBClicks := 0;
+  FBlockedClicks := 0;
+  FPanelClicks := 0;
+  FTwinClicks[ 0 ] := 0;
+  FTwinClicks[ 1 ] := 0;
+  FStyledClicks := 0;
+  FSameDClicks := 0;
+  FModalResult := 0;
+  FMousePoint := Point( -1, -1 );
+  FMouseShift := [];
+
   BuildForm;
 
   TAutomationServer.Start( APP_NAME, False );
@@ -347,11 +617,24 @@ begin
   for var sName in [ CMD_MAIN, CMD_WORKER, CMD_FAIL, CMD_SHADOW ] do
     TAutomationServer.UnregisterCommand( sName );
   FreeAndNil( FDocked );
-  FreeAndNil( FForm ); // owns FLabel and FMemo
+  FreeAndNil( FDlgA );
+  FreeAndNil( FDlgB );
+  FreeAndNil( FDlgC );
+  FreeAndNil( FDlgD );
+  FreeAndNil( FModalOwner );
+  FreeAndNil( FModal );
+  FreeAndNil( FForm ); // owns FLabel, FMemo, FClickPanel and FDropZone
 
 end;
 
 function TTestGllAutomationServer.Send( const ACmd, AArgs: string ): TJSONObject;
+begin
+
+  Result := SendDelayed( ACmd, AArgs, 0 );
+
+end;
+
+function TTestGllAutomationServer.SendDelayed( const ACmd, AArgs: string; ADelayMs: Integer ): TJSONObject;
 begin
 
   var oReq: TJSONObject;
@@ -365,7 +648,7 @@ begin
   var sLine := oReq.ToJSON;
   oReq.Free;
 
-  var sReply := SendLine( sLine );
+  var sReply := SendLine( sLine, ADelayMs );
   Result := TJSONObject.ParseJSONValue( sReply ) as TJSONObject;
   if Result = nil then
     Assert.Fail( 'reply is not a JSON object: ' + sReply );
@@ -385,7 +668,7 @@ begin
 
 end;
 
-function TTestGllAutomationServer.SendLine( const ALine: string ): string;
+function TTestGllAutomationServer.SendLine( const ALine: string; ADelayMs: Integer ): string;
 begin
 
   var iPort := TAutomationServer.Port;
@@ -396,6 +679,8 @@ begin
   var oThread := TThread.CreateAnonymousThread(
     procedure
     begin
+      if ADelayMs > 0 then
+        Sleep( ADelayMs );
       var oClient := TIdTCPClient.Create( nil );
       try
         try
@@ -963,6 +1248,664 @@ begin
     AssertStyledEditBorder( oPng, rcMemo.Left - rcForm.Left, rcMemo.Top - rcForm.Top, rcMemo.Width, rcMemo.Height, oReply.ToJSON );
   finally
     oPng.Free;
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.CountClick( Sender: TObject );
+begin
+
+  Inc( FCountClicks );
+
+end;
+
+procedure TTestGllAutomationServer.SameAClick( Sender: TObject );
+begin
+
+  Inc( FSameAClicks );
+
+end;
+
+procedure TTestGllAutomationServer.SameBClick( Sender: TObject );
+begin
+
+  Inc( FSameBClicks );
+
+end;
+
+procedure TTestGllAutomationServer.BlockedClick( Sender: TObject );
+begin
+
+  Inc( FBlockedClicks );
+
+end;
+
+procedure TTestGllAutomationServer.PanelMouseDown( Sender: TObject; Button: TMouseButton; Shift: TShiftState; X, Y: Integer );
+begin
+
+  FMousePoint := Point( X, Y );
+  FMouseShift := Shift;
+
+end;
+
+procedure TTestGllAutomationServer.PanelClick( Sender: TObject );
+begin
+
+  Inc( FPanelClicks );
+
+end;
+
+procedure TTestGllAutomationServer.TwinClick( Sender: TObject );
+begin
+
+  Inc( FTwinClicks[ TComponent( Sender ).Tag ] );
+
+end;
+
+procedure TTestGllAutomationServer.StyledClick( Sender: TObject );
+begin
+
+  Inc( FStyledClicks );
+
+end;
+
+procedure TTestGllAutomationServer.SlowClick( Sender: TObject );
+begin
+
+  Sleep( 2500 );
+  FDlgA.Hide;
+
+end;
+
+procedure TTestGllAutomationServer.NestClick( Sender: TObject );
+begin
+
+  var oNested := TForm.CreateNew( nil );
+  try
+    oNested.Caption := 'Nested';
+    oNested.SetBounds( -2400, -2900, 200, 100 );
+    var oTimer := TTimer.Create( oNested );
+    oTimer.Interval := 2500;
+    oTimer.OnTimer := NestTimer;
+    oNested.ShowModal;
+  finally
+    oNested.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.NestTimer( Sender: TObject );
+begin
+
+  TTimer( Sender ).Enabled := False;
+  TForm( TComponent( Sender ).Owner ).ModalResult := mrCancel;
+
+end;
+
+procedure TTestGllAutomationServer.SameDClick( Sender: TObject );
+begin
+
+  Inc( FSameDClicks );
+
+end;
+
+procedure TTestGllAutomationServer.BuildDialogs;
+
+  function NewWindow( const AName: string; ALeft: Integer ): TForm;
+  begin
+
+    Result := TForm.CreateNew( nil );
+    Result.Name := AName;
+    Result.Caption := AName;
+    Result.SetBounds( ALeft, -3000, 300, 200 );
+
+  end;
+
+  procedure AddButton( AForm: TForm; const ACaption: string; ATop: Integer; const AOnClick: TNotifyEvent );
+  begin
+
+    var oButton := TButton.Create( AForm );
+    oButton.Parent := AForm;
+    oButton.Caption := ACaption;
+    oButton.SetBounds( 10, ATop, 90, 25 );
+    oButton.OnClick := AOnClick;
+
+  end;
+
+begin
+
+  FDlgA := NewWindow( 'DlgA', -2500 );
+  FDlgA.SetBounds( -2500, -3000, 300, 300 );
+  AddButton( FDlgA, '&Count', 10, CountClick );
+  AddButton( FDlgA, 'Same', 50, SameAClick );
+  for var iTwin := 0 to 1 do
+  begin
+    FTwins[ iTwin ] := TButton.Create( FDlgA );
+    FTwins[ iTwin ].Parent := FDlgA;
+    FTwins[ iTwin ].Caption := 'Twin';
+    FTwins[ iTwin ].Tag := iTwin;
+    FTwins[ iTwin ].SetBounds( 110, 10 + 40 * iTwin, 90, 25 );
+    FTwins[ iTwin ].OnClick := TwinClick;
+  end;
+  AddButton( FDlgA, 'Slow', 90, SlowClick );
+  AddButton( FDlgA, 'Nest', 130, NestClick );
+  var oStyled := TFakeStyledButton.Create( FDlgA );
+  oStyled.Parent := FDlgA;
+  oStyled.SetBounds( 110, 90, 90, 25 );
+  oStyled.Caption := 'Styled';
+  oStyled.OnClick := StyledClick;
+  var oText := TStaticText.Create( FDlgA );
+  oText.Parent := FDlgA;
+  oText.SetBounds( 10, 170, 200, 20 );
+  oText.Caption := 'Hello there';
+  FDlgA.Show;
+
+  FDlgB := NewWindow( 'DlgB', -2100 );
+  AddButton( FDlgB, 'Same', 10, SameBClick );
+  FDlgB.Show;
+
+  FDlgC := NewWindow( 'DlgC', -1700 );
+  AddButton( FDlgC, 'Blocked', 10, BlockedClick );
+  FDlgC.Show;
+  EnableWindow( FDlgC.Handle, False );
+
+end;
+
+procedure TTestGllAutomationServer.Pump( AMs: Integer );
+begin
+
+  var rWatch := TStopwatch.StartNew;
+  while rWatch.ElapsedMilliseconds < AMs do
+  begin
+    CheckSynchronize( 5 );
+    Application.ProcessMessages;
+  end;
+
+end;
+
+function TTestGllAutomationServer.JsonText( const AText: string ): string;
+begin
+
+  var oText := TJSONString.Create( AText );
+  try
+    Result := oText.ToJSON;
+  finally
+    oText.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_Click_IsDeliveredOnce;
+begin
+
+  BuildDialogs;
+  var oReply := Send( 'dialogs', '{"button":"Count"}' );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Pump( 300 );
+    Assert.AreEqual( 1, FCountClicks, 'the Count button''s handler ran this often for one click: ' + oReply.ToJSON );
+    Assert.AreEqual( 'unchanged', oReply.GetValue<string>( 'result.outcome', '' ), oReply.ToJSON );
+    Assert.IsFalse( oReply.GetValue<Boolean>( 'result.dismissed' ), oReply.ToJSON );
+    Assert.AreEqual( 'bmClick', oReply.GetValue<string>( 'result.method', '' ), 'a TButton takes BM_CLICK: ' + oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_AmbiguousCaption_IsRefused;
+begin
+
+  BuildDialogs;
+  Assert.AreEqual( 'AmbiguousButton', SendFail( 'dialogs', '{"button":"Same"}' ) );
+  Pump( 300 );
+  Assert.AreEqual( 0, FSameAClicks + FSameBClicks, 'a Same button was clicked although the caption is ambiguous' );
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_Hwnd_NarrowsTheSearch;
+begin
+
+  BuildDialogs;
+  var oReply := Send( 'dialogs', Format( '{"button":"Same","hwnd":%d}', [ IntPtr( FDlgB.Handle ) ] ) );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Pump( 300 );
+    Assert.AreEqual( 1, FSameBClicks, 'DlgB''s Same button: ' + oReply.ToJSON );
+    Assert.AreEqual( 0, FSameAClicks, 'DlgA''s Same button was clicked although hwnd named DlgB' );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_ButtonInDisabledWindow_IsNotClicked;
+begin
+
+  BuildDialogs;
+  Assert.AreEqual( 'NotClickable', SendFail( 'dialogs', '{"button":"Blocked"}' ) );
+  Pump( 300 );
+  Assert.AreEqual( 0, FBlockedClicks, 'the button in the disabled window was clicked' );
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_List_SaysWhichButtonsCanBeClicked;
+begin
+
+  BuildDialogs;
+  var oReply := Send( 'dialogs' );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    var bFoundA := False;
+    var bFoundC := False;
+    for var oWindow in oReply.GetValue<TJSONArray>( 'result.windows' ) do
+    begin
+      var iWindow := oWindow.GetValue<Int64>( 'hwnd' );
+      Assert.IsNotNull( oWindow.FindValue( 'modal' ), 'a window without "modal": ' + oWindow.ToJSON );
+      for var oButton in oWindow.GetValue<TJSONArray>( 'buttons' ) do
+      begin
+        Assert.IsTrue( oButton.GetValue<Int64>( 'hwnd', 0 ) <> 0, 'a button without its handle: ' + oButton.ToJSON );
+        if iWindow = IntPtr( FDlgC.Handle ) then
+        begin
+          bFoundC := True;
+          Assert.IsFalse( oButton.GetValue<Boolean>( 'clickable', True ), 'the button in the disabled window: ' + oButton.ToJSON );
+          Assert.IsTrue( oButton.GetValue<Boolean>( 'enabled' ), 'the button itself is enabled: ' + oButton.ToJSON );
+        end
+        else if iWindow = IntPtr( FDlgA.Handle ) then
+        begin
+          bFoundA := True;
+          Assert.IsTrue( oButton.GetValue<Boolean>( 'clickable', False ), 'a button in an enabled window: ' + oButton.ToJSON );
+        end;
+      end;
+    end;
+    Assert.IsTrue( bFoundA and bFoundC, 'DlgA or DlgC is missing from the list: ' + oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.ClickAt_ClicksAtThePoint_WithTheKeysAskedFor;
+begin
+
+  var oReply := Send( 'click_at', Format( '{"form":"%s","name":"pnlClick","x":15,"y":20,"shift":"Shift"}', [ FORM_NAME ] ) );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Pump( 300 );
+    Assert.AreEqual( 1, FPanelClicks, 'the panel''s OnClick: ' + oReply.ToJSON );
+    Assert.AreEqual( 15, FMousePoint.X, 'x' );
+    Assert.AreEqual( 20, FMousePoint.Y, 'y' );
+    Assert.IsTrue( ssShift in FMouseShift, 'Shift was asked for' );
+    Assert.IsFalse( ssCtrl in FMouseShift, 'Ctrl was not asked for' );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.ClickAt_OutsideTheControl_IsRefused;
+begin
+
+  Assert.AreEqual( 'OutsideControl', SendFail( 'click_at', Format( '{"form":"%s","name":"pnlClick","x":500,"y":20}', [ FORM_NAME ] ) ) );
+  Pump( 200 );
+  Assert.AreEqual( 0, FPanelClicks, 'a click outside the panel reached it' );
+
+end;
+
+procedure TTestGllAutomationServer.DropFiles_DeliversTheFilesAndThePoint;
+begin
+
+  var sFirst := TPath.Combine( TPath.GetTempPath, 'gllAutoDrop one.txt' );
+  var sSecond := TPath.Combine( TPath.GetTempPath, 'gllAutoDrop-two.txt' );
+  TFile.WriteAllText( sFirst, '1' );
+  TFile.WriteAllText( sSecond, '2' );
+  try
+    var oReply := Send( 'drop_files', Format( '{"form":"%s","name":"dropZone","files":[%s,%s],"x":5,"y":6}',
+      [ FORM_NAME, JsonText( sFirst ), JsonText( sSecond ) ] ) );
+    try
+      Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+      Pump( 300 );
+      var oZone := TDropZone( FDropZone );
+      Assert.AreEqual( 2, Length( oZone.Files ), 'files dropped: ' + oReply.ToJSON );
+      Assert.AreEqual( sFirst, oZone.Files[ 0 ] );
+      Assert.AreEqual( sSecond, oZone.Files[ 1 ] );
+      Assert.AreEqual( 5, oZone.DropPoint.X, 'x' );
+      Assert.AreEqual( 6, oZone.DropPoint.Y, 'y' );
+    finally
+      oReply.Free;
+    end;
+  finally
+    TFile.Delete( sFirst );
+    TFile.Delete( sSecond );
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.DropFiles_WithNoDropTarget_IsRefused;
+begin
+
+  var sFile := TPath.Combine( TPath.GetTempPath, 'gllAutoDrop-none.txt' );
+  TFile.WriteAllText( sFile, '1' );
+  try
+    Assert.AreEqual( 'NoDropTarget', SendFail( 'drop_files', Format( '{"form":"%s","name":"edtType","files":[%s]}',
+      [ FORM_NAME, JsonText( sFile ) ] ) ) );
+  finally
+    TFile.Delete( sFile );
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.DropFiles_MissingFile_IsRefused;
+begin
+
+  var sFile := TPath.Combine( TPath.GetTempPath, Format( 'gllAutoDrop-missing-%u.txt', [ GetTickCount64 ] ) );
+  Assert.AreEqual( 'NoFile', SendFail( 'drop_files', Format( '{"form":"%s","name":"dropZone","files":[%s]}',
+    [ FORM_NAME, JsonText( sFile ) ] ) ) );
+  Pump( 200 );
+  Assert.AreEqual( 0, Integer( Length( TDropZone( FDropZone ).Files ) ), 'something was dropped' );
+
+end;
+
+procedure TTestGllAutomationServer.RenderControl_RendersWhatTheResolverFinds;
+begin
+
+  var oMemo := FMemo;
+  TAutomationServer.RegisterCommand( 'test_render',
+    function( ARequest: TJSONObject ): TJSONValue
+    begin
+      Result := TAutomationServer.RenderControl(
+        function: TControl
+        begin
+          Result := oMemo;
+        end, 0, APP_NAME );
+    end, actWorkerThread );
+  try
+    var oReply := Send( 'test_render' );
+    try
+      Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+      var sPath := oReply.GetValue<string>( 'result.path' );
+      try
+        Assert.AreEqual( 'Memo1', oReply.GetValue<string>( 'result.target' ), oReply.ToJSON );
+        Assert.AreEqual( 'control', oReply.GetValue<string>( 'result.area' ), oReply.ToJSON );
+        var rcMemo: TRect;
+        GetWindowRect( FMemo.Handle, rcMemo );
+        Assert.AreEqual( rcMemo.Width, oReply.GetValue<Integer>( 'result.width' ), 'width: ' + oReply.ToJSON );
+        Assert.AreEqual( rcMemo.Height, oReply.GetValue<Integer>( 'result.height' ), 'height: ' + oReply.ToJSON );
+        Assert.IsTrue( TFile.Exists( sPath ), 'no PNG at ' + sPath );
+      finally
+        if TFile.Exists( sPath ) then
+          TFile.Delete( sPath );
+      end;
+    finally
+      oReply.Free;
+    end;
+  finally
+    TAutomationServer.UnregisterCommand( 'test_render' );
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_ButtonHwnd_ClicksOneOfTwoTwins;
+begin
+
+  BuildDialogs;
+  Assert.AreEqual( 'AmbiguousButton', SendFail( 'dialogs', Format( '{"button":"Twin","hwnd":%d}', [ IntPtr( FDlgA.Handle ) ] ) ),
+    'two Twins in one window: hwnd cannot settle it' );
+  var oReply := Send( 'dialogs', Format( '{"buttonHwnd":%d}', [ IntPtr( FTwins[ 1 ].Handle ) ] ) );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Pump( 300 );
+    Assert.AreEqual( 1, FTwinClicks[ 1 ], 'the Twin named: ' + oReply.ToJSON );
+    Assert.AreEqual( 0, FTwinClicks[ 0 ], 'the other Twin was clicked' );
+    Assert.AreEqual<Int64>( IntPtr( FTwins[ 1 ].Handle ), oReply.GetValue<Int64>( 'result.buttonHwnd' ) );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_SlowHandler_IsJudgedAfterItRan;
+begin
+
+  BuildDialogs;
+  var oReply := Send( 'dialogs', '{"button":"Slow"}' );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Assert.AreEqual( 'gone', oReply.GetValue<string>( 'result.outcome', '' ), oReply.ToJSON );
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'result.dismissed' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_HandlerNotRunYet_IsPending;
+begin
+
+  BuildDialogs;
+  var oReply := Send( 'dialogs', '{"button":"Slow","wait":200}' );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Assert.AreEqual( 'pending', oReply.GetValue<string>( 'result.outcome', '' ), oReply.ToJSON );
+    Assert.IsFalse( oReply.GetValue<Boolean>( 'result.dismissed' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+  Pump( 3200 );
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_SeveralMatches_ThePromptWins;
+begin
+
+  BuildDialogs;
+  FModalOwner := TForm.CreateNew( nil );
+  FModalOwner.Name := 'DlgOwner';
+  FModalOwner.SetBounds( -1300, -3000, 200, 100 );
+  FModalOwner.Show;
+  FDlgD := TForm.CreateNew( nil );
+  FDlgD.Name := 'DlgD';
+  FDlgD.Caption := 'DlgD';
+  FDlgD.PopupMode := pmExplicit;
+  FDlgD.PopupParent := FModalOwner;
+  FDlgD.SetBounds( -1000, -3000, 200, 100 );
+  var oSame := TButton.Create( FDlgD );
+  oSame.Parent := FDlgD;
+  oSame.Caption := 'Same';
+  oSame.OnClick := SameDClick;
+  FDlgD.Show;
+  EnableWindow( FModalOwner.Handle, False );
+
+  var oReply := Send( 'dialogs', '{"button":"Same"}' );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Pump( 300 );
+    Assert.AreEqual( 1, FSameDClicks, 'the Same in the modal window: ' + oReply.ToJSON );
+    Assert.AreEqual( 0, FSameAClicks + FSameBClicks, 'a Same in a plain window was clicked' );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_ShowModalOk_IsGone;
+begin
+
+  FModal := TForm.CreateNew( nil );
+  FModal.Name := 'DlgModal';
+  FModal.Caption := 'DlgModal';
+  FModal.SetBounds( -2000, -2500, 250, 120 );
+  var oOk := TButton.Create( FModal );
+  oOk.Parent := FModal;
+  oOk.Caption := 'ModalOK';
+  oOk.ModalResult := mrOk;
+  TThread.ForceQueue( nil,
+    procedure
+    begin
+      FModalResult := FModal.ShowModal;
+    end );
+
+  var oReply := SendDelayed( 'dialogs', '{"button":"ModalOK"}', 500 );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Assert.AreEqual( 'gone', oReply.GetValue<string>( 'result.outcome', '' ), oReply.ToJSON );
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'result.dismissed' ), oReply.ToJSON );
+    Assert.AreEqual( Integer( mrOk ), FModalResult, 'ShowModal''s result' );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_ClickOpeningAModal_IsCovered;
+begin
+
+  BuildDialogs;
+  var oReply := Send( 'dialogs', '{"button":"Nest"}' );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Assert.AreEqual( 'covered', oReply.GetValue<string>( 'result.outcome', '' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+  Pump( 3000 );
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_StyledButton_TakesTheMousePath;
+begin
+
+  BuildDialogs;
+  var oReply := Send( 'dialogs', '{"button":"Styled"}' );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Assert.AreEqual( 'mouse', oReply.GetValue<string>( 'result.method', '' ), oReply.ToJSON );
+    Pump( 300 );
+    Assert.AreEqual( 1, FStyledClicks, 'the styled button''s handler: ' + oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_ModalOnly_LeavesOutPlainWindows;
+begin
+
+  BuildDialogs;
+  var oReply := Send( 'dialogs', '{"modalOnly":true}' );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    for var oWindow in oReply.GetValue<TJSONArray>( 'result.windows' ) do
+    begin
+      var iWindow := oWindow.GetValue<Int64>( 'hwnd' );
+      Assert.IsFalse( ( iWindow = IntPtr( FDlgA.Handle ) ) or ( iWindow = IntPtr( FDlgB.Handle ) ) or
+        ( iWindow = IntPtr( FDlgC.Handle ) ), 'a plain window was listed as modal: ' + oWindow.ToJSON );
+      Assert.IsTrue( oWindow.GetValue<Boolean>( 'modal' ), oWindow.ToJSON );
+    end;
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_List_ReadsStaticTexts;
+begin
+
+  BuildDialogs;
+  var oReply := Send( 'dialogs' );
+  try
+    var bFound := False;
+    for var oWindow in oReply.GetValue<TJSONArray>( 'result.windows' ) do
+      if oWindow.GetValue<Int64>( 'hwnd' ) = IntPtr( FDlgA.Handle ) then
+        for var oText in oWindow.GetValue<TJSONArray>( 'texts' ) do
+          if oText.Value = 'Hello there' then
+            bFound := True;
+    Assert.IsTrue( bFound, 'DlgA''s TStaticText is not in its texts: ' + oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_MainThreadBusy_SaysSo;
+begin
+
+  var oIdle := Send( 'dialogs' );
+  try
+    Assert.IsFalse( oIdle.GetValue<Boolean>( 'result.mainThreadBusy' ), 'an idle main thread: ' + oIdle.ToJSON );
+  finally
+    oIdle.Free;
+  end;
+
+  TThread.ForceQueue( nil,
+    procedure
+    begin
+      Sleep( 1500 );
+    end );
+  var oBusy := SendDelayed( 'dialogs', '', 300 );
+  try
+    Assert.IsTrue( oBusy.GetValue<Boolean>( 'result.mainThreadBusy' ), 'a main thread asleep for 1.5 s: ' + oBusy.ToJSON );
+  finally
+    oBusy.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Dialogs_BadHwnd_IsRefused;
+begin
+
+  BuildDialogs;
+  Assert.AreEqual( 'NoWindow', SendFail( 'dialogs', '{"hwnd":1}' ), 'no such window' );
+  Assert.AreEqual( 'NoWindow', SendFail( 'dialogs', Format( '{"hwnd":%d}', [ IntPtr( FTwins[ 0 ].Handle ) ] ) ), 'a child window' );
+  Assert.AreEqual( 'NoWindow', SendFail( 'dialogs', Format( '{"hwnd":%d}', [ IntPtr( GetDesktopWindow ) ] ) ), 'another process''s' );
+  Assert.AreEqual( 'BadRequest', SendFail( 'dialogs', '{"hwnd":"DlgA"}' ), 'not a number' );
+  Assert.AreEqual( 'NoWindow', SendFail( 'dialogs', '{"buttonHwnd":1}' ), 'no such button' );
+  Assert.AreEqual( 'NoWindow', SendFail( 'dialogs', Format( '{"buttonHwnd":%d}', [ IntPtr( FDlgA.Handle ) ] ) ), 'not a button' );
+  Pump( 200 );
+  Assert.AreEqual( 0, FTwinClicks[ 0 ] + FTwinClicks[ 1 ] + FCountClicks, 'something was clicked' );
+
+end;
+
+procedure TTestGllAutomationServer.DropFiles_NonAsciiPath_ArrivesIntact;
+begin
+
+  var sFile := TPath.Combine( TPath.GetTempPath, 'gllAutoDrop-ünïcödé-日本.txt' );
+  TFile.WriteAllText( sFile, '1' );
+  try
+    var oReply := Send( 'drop_files', Format( '{"form":"%s","name":"dropZone","files":[%s]}', [ FORM_NAME, JsonText( sFile ) ] ) );
+    try
+      Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+      Pump( 300 );
+      var oZone := TDropZone( FDropZone );
+      Assert.AreEqual( 1, Integer( Length( oZone.Files ) ), oReply.ToJSON );
+      Assert.AreEqual( sFile, oZone.Files[ 0 ], False );
+    finally
+      oReply.Free;
+    end;
+  finally
+    TFile.Delete( sFile );
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.RegisterCommand_RefusesASecondProvider;
+begin
+
+  Assert.WillRaise(
+    procedure
+    begin
+      TAutomationServer.RegisterCommand( CMD_MAIN,
+        function( ARequest: TJSONObject ): TJSONValue
+        begin
+          Result := TJSONString.Create( SHADOW_MARKER );
+        end );
+    end, EArgumentException, 'a second registration of a registered name' );
+
+  var oReply := Send( CMD_MAIN, '{"text":"first"}' );
+  try
+    Assert.AreEqual( 'first', oReply.GetValue<string>( 'result.echo', '' ), False, 'the first provider must still answer: ' + oReply.ToJSON );
+  finally
     oReply.Free;
   end;
 

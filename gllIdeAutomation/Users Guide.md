@@ -549,6 +549,42 @@ The click happens after the answer, so check `dialogs` next if it opens one.
 Poll `debug_state` until `current.location` appears after starting the program. `debug_step`,
 `debug_run_to` and `debug_run` with a `wait` answer once the process has stopped again, and say where.
 
+They refuse instead of waiting for nothing: `IdeAsking` while the IDE shows a prompt (its exception
+notification - answer it with `dialogs` first), and, for a step, `BreakInThread` after
+`debug_pause`, whose current thread is the debugger's own (`debug_threads`, then
+`debug_set_thread`). `ide_quit` refuses with `Debugging` while a process is being debugged; pass
+`"terminate":true` to end it first. `debug_disasm` lists the code around the instruction pointer
+once a CPU window has been opened (`ide_action` with `"name":"DebugCPUCommand"`).
+
+**Actions.** `ide_actions` with a `filter` lists what the IDE can do; `ide_action` runs one by name,
+just after answering, and refuses one that is disabled:
+
+```json
+{ "token":"…", "id":11, "cmd":"ide_actions", "filter":"run" }
+{ "token":"…", "id":12, "cmd":"ide_action", "name":"RunRunCommand" }
+```
+
+**Files and projects.** `ide_open_file`, `ide_modules`, `ide_save` and `ide_close_module` (with the
+same `refuse` / `save` / `discard` choice as `ide_quit`); `ide_projects` and `ide_set_project` choose
+the project Compile, Run and the debugger act on.
+
+## 15a. The form designer
+
+```json
+{ "token":"…", "id":13, "cmd":"ide_designer_show", "file":"D:\\Work\\Unit1.pas" }
+{ "token":"…", "id":14, "cmd":"ide_designer_select", "names":["Button1","Timer1"] }
+{ "token":"…", "id":15, "cmd":"ide_designer_selection" }
+{ "token":"…", "id":16, "cmd":"ide_designer_screenshot", "maxWidth":1200 }
+{ "token":"…", "id":17, "cmd":"ide_view_as_text", "file":"Unit1.pas" }
+{ "token":"…", "id":18, "cmd":"ide_view_as_form", "file":"Unit1.dfm" }
+```
+
+A form is named by its unit or its `.dfm`, or `.` for the module in front. Selecting the form itself
+(`ide_designer_deselect`) is what the designer means by nothing selected. While a form is shown as
+text its unit is closed and the `.dfm` is a module of its own, so the editor and `ide_modules` name
+the `.dfm`; text the IDE cannot read puts up a modal "Error creating form" box when it is shown as a
+form again - look with `dialogs`.
+
 ---
 
 ## 16. Where to go next

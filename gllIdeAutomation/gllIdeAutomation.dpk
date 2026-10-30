@@ -47,6 +47,7 @@ requires
 contains
   gllIdeAutomation.Starter in 'src\gllIdeAutomation.Starter.pas',
   gllIdeAutomation.TreeText in 'src\gllIdeAutomation.TreeText.pas',
+  gllIdeAutomation.Rules in 'src\gllIdeAutomation.Rules.pas',
   gllIdeAutomation.IdeCommands in 'src\gllIdeAutomation.IdeCommands.pas';
 
 end.

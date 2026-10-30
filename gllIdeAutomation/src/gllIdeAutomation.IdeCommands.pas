@@ -3,9 +3,18 @@
 
     (C) 2026 Ian Branch (GITLAK Software). All rights reserved.
 
+    Portions derived from GExperts' GxInspect by Thomas Mueller (dummzeuch),
+    svn r6031, all from ide\GxInspect_Ide.pas: TCpuDisassembler and
+    debug_disasm (from TGxCpuDisassembler and CmdDisasm); the form-view swap
+    behind ide_view_as_text / ide_view_as_form (from DescribeFormView,
+    FindFormView and SwapFormView); FindFormEditor's two-pass matching (from
+    FindFormEditorFor and FindFormView); and OpenFileKeepingForeground (from
+    OpenFileInIde).  Each is adapted to this unit's commands and style.
+
     This code and all associated intellectual property, including proprietary
     algorithms and confidential information, are the exclusive property of Ian
-    Branch (GITLAK Software).
+    Branch (GITLAK Software), save the portions named above, which remain
+    subject to GExperts' own licence.
 
     Any reproduction, distribution, or use, in whole or in part, by any other
     party is strictly prohibited without the express written permission of the
@@ -23,6 +32,8 @@
 
   Author(s) :
   Ian Branch - GITLAK Software.
+  Co-developed: Thomas Mueller (dummzeuch) - GExperts' GxInspect, the portions
+  named above.
 
   ***************************************************************************
 *)
@@ -36,13 +47,16 @@
 
   PROVENANCE: the command set was chosen after reading GxInspect (GExperts' inspection server,
   ^/GxInspect/trunk), whose README documents what each of these IDE operations really does when
-  measured. That behaviour - not its source, which is MPL - is what was taken: every line below
-  was written here against ToolsAPI.pas. The findings that shaped a command are cited at the
-  command.
+  measured. Until 2026-10-30 only that behaviour was taken and every line was written here against
+  ToolsAPI.pas. On 2026-10-30 (Ian: port or reimplement, whichever is better per feature) the
+  self-contained routines named in the header were ported from svn r6031 and adapted; the rest of
+  that day's commands (modules, projects, actions, the designer's selection, the breakpoint
+  properties) were reimplemented. The findings that shaped a command are cited at the command.
 *)
 /// <summary>
 ///   ToolsAPI commands for the in-IDE automation server: closing the IDE without it stopping to
-///   ask, walking and clicking the main menu, and driving the IDE's own debugger.
+///   ask, walking and clicking the main menu, executing actions, opening, saving and closing modules,
+///   choosing the active project, driving the form designer, and driving the IDE's own debugger.
 /// </summary>
 unit gllIdeAutomation.IdeCommands;
 
@@ -65,19 +79,17 @@ implementation
 
 uses
   System.SysUtils, System.Classes, System.JSON, System.TypInfo, System.SyncObjs, System.Diagnostics,
-  System.Generics.Collections,
+  System.Generics.Collections, System.Math, System.Rtti,
   Winapi.Windows,
-  Vcl.Forms, Vcl.Menus, Vcl.Controls,
+  Vcl.Forms, Vcl.Menus, Vcl.Controls, Vcl.ActnList,
   ToolsAPI,
-  gllAutomationServer, gllIdeAutomation.TreeText;
+  gllAutomationServer, gllIdeAutomation.TreeText, gllIdeAutomation.Rules;
 
 const
   /// <summary>How long <c>ide_quit</c> and <c>ide_menu_click</c> wait before acting, so their answer is on the wire first.</summary>
   DEFER_MS            = 150;
   /// <summary>Default wait, in milliseconds, of a step or run-to for the process to stop again.</summary>
   STEP_WAIT_MS        = 10000;
-  /// <summary>Upper bound on any <c>wait</c> argument; a mistyped one must not hold a connection for an hour.</summary>
-  MAX_WAIT_MS         = 120000;
   /// <summary>Polling step while waiting for the debugger to report a stop.</summary>
   WAIT_POLL_MS        = 20;
   /// <summary>Default number of call-stack frames returned.</summary>
@@ -97,11 +109,15 @@ const
   WAIT_END_STATES     = STOPPED_STATES + [ psTerminated, psNoProcess ];
 
   /// <summary>Every command this unit registers, so that unregistering cannot miss one.</summary>
-  COMMAND_NAMES: array[ 0..21 ] of string = (
+  COMMAND_NAMES: array[ 0..37 ] of string = (
     'tree_text', 'ide_modified', 'ide_quit', 'ide_menu', 'ide_menu_click',
+    'ide_open_file', 'ide_modules', 'ide_close_module', 'ide_save', 'ide_projects', 'ide_set_project',
+    'ide_actions', 'ide_action',
+    'ide_designer_show', 'ide_designer_screenshot', 'ide_designer_selection', 'ide_designer_select',
+    'ide_designer_deselect', 'ide_view_as_text', 'ide_view_as_form',
     'debug_state', 'debug_attach', 'debug_detach', 'debug_pause', 'debug_run', 'debug_step',
     'debug_run_to', 'debug_terminate', 'debug_threads', 'debug_set_thread', 'debug_stack',
-    'debug_registers', 'debug_memory', 'debug_eval', 'debug_breakpoints', 'debug_breakpoint_set',
+    'debug_registers', 'debug_memory', 'debug_disasm', 'debug_eval', 'debug_breakpoints', 'debug_breakpoint_set',
     'debug_breakpoint_delete' );
 
 type
@@ -216,99 +232,6 @@ function StopGeneration: Integer;
 begin
 
   Result := TInterlocked.CompareExchange( GStopGeneration, 0, 0 );
-
-end;
-
-/// <summary>
-///   Reads an optional argument, keeping <paramref name="ADefault"/> when it is absent.
-///   <c>TJSONValue.TryGetValue</c> cannot be used for this on its own: it sets its out parameter to
-///   <c>Default( T )</c> when the key is missing, so a default assigned beforehand is silently replaced
-///   by False, 0 or ''. That once made every new breakpoint come out disabled.
-/// </summary>
-/// <param name="AReq">The request.</param>
-/// <param name="AKey">The argument's name.</param>
-/// <param name="ADefault">The value when the argument is absent.</param>
-/// <returns>The argument, or <paramref name="ADefault"/>.</returns>
-/// <exception cref="EAutoError"><c>BadRequest</c> when the argument is present but not a string.</exception>
-function OptString( AReq: TJSONObject; const AKey, ADefault: string ): string;
-begin
-
-  if AReq.GetValue( AKey ) = nil then Exit( ADefault );
-  if not AReq.TryGetValue<string>( AKey, Result ) then
-    raise EAutoError.CreateCode( 'BadRequest', Format( '"%s" must be a string', [ AKey ] ) );
-
-end;
-
-/// <summary>Reads an optional integer argument; see <see cref="OptString"/> for why this is not a bare TryGetValue.</summary>
-/// <param name="AReq">The request.</param>
-/// <param name="AKey">The argument's name.</param>
-/// <param name="ADefault">The value when the argument is absent.</param>
-/// <returns>The argument, or <paramref name="ADefault"/>.</returns>
-/// <exception cref="EAutoError"><c>BadRequest</c> when the argument is present but not a number.</exception>
-function OptInteger( AReq: TJSONObject; const AKey: string; ADefault: Integer ): Integer;
-begin
-
-  if AReq.GetValue( AKey ) = nil then Exit( ADefault );
-  if not AReq.TryGetValue<Integer>( AKey, Result ) then
-    raise EAutoError.CreateCode( 'BadRequest', Format( '"%s" must be a number', [ AKey ] ) );
-
-end;
-
-/// <summary>Reads an optional Boolean argument; see <see cref="OptString"/> for why this is not a bare TryGetValue.</summary>
-/// <param name="AReq">The request.</param>
-/// <param name="AKey">The argument's name.</param>
-/// <param name="ADefault">The value when the argument is absent.</param>
-/// <returns>The argument, or <paramref name="ADefault"/>.</returns>
-/// <exception cref="EAutoError"><c>BadRequest</c> when the argument is present but not true or false.</exception>
-function OptBoolean( AReq: TJSONObject; const AKey: string; ADefault: Boolean ): Boolean;
-begin
-
-  if AReq.GetValue( AKey ) = nil then Exit( ADefault );
-  if not AReq.TryGetValue<Boolean>( AKey, Result ) then
-    raise EAutoError.CreateCode( 'BadRequest', Format( '"%s" must be true or false', [ AKey ] ) );
-
-end;
-
-/// <summary>Reads a required string argument.</summary>
-/// <param name="AReq">The request.</param>
-/// <param name="AKey">The argument's name.</param>
-/// <param name="ACommand">The command, for the message.</param>
-/// <returns>The value, never empty.</returns>
-/// <exception cref="EAutoError"><c>BadRequest</c> when the argument is missing or empty.</exception>
-function NeedString( AReq: TJSONObject; const AKey, ACommand: string ): string;
-begin
-
-  Result := '';
-  AReq.TryGetValue<string>( AKey, Result );
-  if Trim( Result ) = '' then
-    raise EAutoError.CreateCode( 'BadRequest', Format( '%s needs "%s"', [ ACommand, AKey ] ) );
-
-end;
-
-/// <summary>Reads a required integer argument.</summary>
-/// <param name="AReq">The request.</param>
-/// <param name="AKey">The argument's name.</param>
-/// <param name="ACommand">The command, for the message.</param>
-/// <returns>The value.</returns>
-/// <exception cref="EAutoError"><c>BadRequest</c> when the argument is missing or not a number.</exception>
-function NeedInteger( AReq: TJSONObject; const AKey, ACommand: string ): Integer;
-begin
-
-  if not AReq.TryGetValue<Integer>( AKey, Result ) then
-    raise EAutoError.CreateCode( 'BadRequest', Format( '%s needs "%s", a number', [ ACommand, AKey ] ) );
-
-end;
-
-/// <summary>Reads the optional <c>wait</c> argument, clamped to 0..<c>MAX_WAIT_MS</c>.</summary>
-/// <param name="AReq">The request.</param>
-/// <param name="ADefault">The value when the argument is absent.</param>
-/// <returns>The wait in milliseconds.</returns>
-function WaitArgument( AReq: TJSONObject; ADefault: Integer ): Integer;
-begin
-
-  Result := OptInteger( AReq, 'wait', ADefault );
-  if Result < 0 then Result := 0;
-  if Result > MAX_WAIT_MS then Result := MAX_WAIT_MS;
 
 end;
 
@@ -476,26 +399,24 @@ end;
 ///   "Confirm" (measured; GxInspect saw a plain API message box in older IDEs) - so a script that
 ///   reaches it waits for a human. So the default looks first and refuses instead.
 /// </summary>
-/// <param name="AReq">
-///   The request: <c>mode</c> = <c>refuse</c> (default: close only when nothing is unsaved),
-///   <c>save</c> (save everything first), <c>discard</c> (force-close every modified module, losing the
-///   changes) or <c>ask</c> (close and let the IDE ask whatever it likes).
+/// <remarks>
+///   This is the main-thread half; <see cref="CmdIdeQuit"/> runs on the worker, ends any debug session first and
+///   waits for it, then synchronises this.  Prefer <c>discard</c> to <c>save</c> in scripts. The IDE modifies files
+///   merely by opening them - a project is upgraded to the running IDE's version, and a form loses or gains
+///   properties such as <c>OldCreateOrder</c> - so saving what it holds writes churn nobody asked for (GxInspect).
+/// </remarks>
+/// <param name="sMode">
+///   <c>refuse</c> (close only when nothing is unsaved), <c>save</c> (save everything first), <c>discard</c>
+///   (force-close every modified module, losing the changes) or <c>ask</c> (close and let the IDE ask whatever it likes).
 /// </param>
 /// <returns><c>{ closing:true, mode, saved|discarded:[...] }</c>; the IDE closes shortly after the answer.</returns>
 /// <exception cref="EAutoError">
 ///   <c>Modified</c> in refuse mode when anything is unsaved, with the list in <c>error.data</c>;
 ///   <c>Untitled</c> in save mode when a file has never been saved, since saving it opens Save As;
-///   <c>SaveFailed</c> / <c>CloseFailed</c> when the IDE declined; <c>BadRequest</c> for an unknown mode.
+///   <c>SaveFailed</c> / <c>CloseFailed</c> when the IDE declined.
 /// </exception>
-/// <remarks>
-///   Prefer <c>discard</c> to <c>save</c> in scripts. The IDE modifies files merely by opening them - a
-///   project is upgraded to the running IDE's version, and a form loses or gains properties such as
-///   <c>OldCreateOrder</c> - so saving what it holds writes churn nobody asked for (GxInspect).
-/// </remarks>
-function CmdIdeQuit( AReq: TJSONObject ): TJSONValue;
+function QuitOnMainThread( const sMode: string ): TJSONObject;
 begin
-
-  var sMode := LowerCase( Trim( OptString( AReq, 'mode', 'refuse' ) ) );
 
   var aEntries := CollectModified;
   var oRes := TJSONObject.Create;
@@ -588,6 +509,77 @@ begin
 
 end;
 
+/// <summary>
+///   <c>ide_quit</c> (worker thread): closes the IDE without leaving it waiting on a question nobody can answer.  A
+///   debug session would make it ask whether to end the session, so that is refused unless the caller said to end it -
+///   and then it is ended FIRST, and waited for, before anything is closed: <c>Terminate</c> does not wait, and the
+///   debugger handles the process's exit on the main thread, which is why this runs on the worker.
+/// </summary>
+/// <param name="AReq">The request: <c>mode?</c> (refuse, save, discard or ask; see <see cref="QuitOnMainThread"/>), <c>terminate?</c>.</param>
+/// <returns>As <see cref="QuitOnMainThread"/>, plus <c>terminated</c> when processes were ended.</returns>
+/// <exception cref="EAutoError">
+///   <c>BadRequest</c> for an unknown mode (checked before anything else); <c>Debugging</c> while a process is being
+///   debugged, in any mode but <c>ask</c>, without <c>terminate:true</c>; <c>TerminateFailed</c> when the processes were
+///   still there after <c>QUIT_TERMINATE_WAIT_MS</c>; and <see cref="QuitOnMainThread"/>'s codes.
+/// </exception>
+function CmdIdeQuit( AReq: TJSONObject ): TJSONValue;
+const
+  QUIT_TERMINATE_WAIT_MS = 15000;
+begin
+
+  var sMode := LowerCase( Trim( OptString( AReq, 'mode', 'refuse' ) ) );
+  if ( sMode <> 'refuse' ) and ( sMode <> 'save' ) and ( sMode <> 'discard' ) and ( sMode <> 'ask' ) then
+    raise EAutoError.CreateCode( 'BadRequest', 'ide_quit mode is refuse, save, discard or ask' );
+  var bTerminate := OptBoolean( AReq, 'terminate', False );
+
+  var iProcesses := 0;
+  TThread.Synchronize( nil,
+    procedure
+    begin
+      iProcesses := DebuggerServices.ProcessCount;
+    end );
+
+  if ( sMode <> 'ask' ) and DebugSessionBlocksQuit( iProcesses, bTerminate ) then
+    raise EAutoError.CreateCode( 'Debugging', Format( 'The IDE is debugging %d process(es), and closing would stop and ask ' +
+      'whether to end the session; pass "terminate":true to end them first, or debug_terminate', [ iProcesses ] ) );
+
+  if bTerminate and ( iProcesses > 0 ) then
+  begin
+    TThread.Synchronize( nil,
+      procedure
+      begin
+        var oDebugger := DebuggerServices;
+        for var iProcess := oDebugger.ProcessCount - 1 downto 0 do
+          oDebugger.Processes[ iProcess ].Terminate;
+      end );
+    var iLeft := iProcesses;
+    var rWatch := TStopwatch.StartNew;
+    while ( iLeft > 0 ) and ( rWatch.ElapsedMilliseconds < QUIT_TERMINATE_WAIT_MS ) do
+    begin
+      Sleep( 100 );
+      TThread.Synchronize( nil,
+        procedure
+        begin
+          iLeft := DebuggerServices.ProcessCount;
+        end );
+    end;
+    if iLeft > 0 then
+      raise EAutoError.CreateCode( 'TerminateFailed', Format( '%d process(es) were still being debugged %d s after being ' +
+        'ended; nothing was closed', [ iLeft, QUIT_TERMINATE_WAIT_MS div 1000 ] ) );
+  end;
+
+  var oRes: TJSONObject := nil;
+  TThread.Synchronize( nil,
+    procedure
+    begin
+      oRes := QuitOnMainThread( sMode );
+    end );
+  if bTerminate and ( iProcesses > 0 ) then
+    oRes.AddPair( 'terminated', TJSONNumber.Create( iProcesses ) );
+  Result := oRes;
+
+end;
+
 { ── ide_menu / ide_menu_click ───────────────────────────────────────────── }
 
 /// <summary>The IDE's main menu.</summary>
@@ -639,12 +631,16 @@ begin
   Result.AddPair( 'count', TJSONNumber.Create( AItem.Count ) );
 
   if ( ADepth > 0 ) and ( AItem.Count > 0 ) then
-  begin
+  try
     FillSubmenu( AItem );
     var oItems := TJSONArray.Create;
     Result.AddPair( 'items', oItems );
     for var iChild := 0 to AItem.Count - 1 do
       oItems.AddElement( MenuItemToJSON( AItem.Items[ iChild ], ADepth - 1 ) );
+  except
+    //  Filling a submenu clicks it, which runs the IDE's code and may raise; nothing half-built is left behind.
+    FreeAndNil( Result );
+    raise;
   end;
 
 end;
@@ -767,10 +763,16 @@ begin
   begin
     var oBar := IdeMainMenu.Items;
     var oRes := TJSONObject.Create;
-    var oItems := TJSONArray.Create;
-    oRes.AddPair( 'items', oItems );
-    for var iItem := 0 to oBar.Count - 1 do
-      oItems.AddElement( MenuItemToJSON( oBar.Items[ iItem ], iDepth - 1 ) );
+    try
+      var oItems := TJSONArray.Create;
+      oRes.AddPair( 'items', oItems );
+      //  Filling a submenu clicks it, which runs the IDE's own code and may raise.
+      for var iItem := 0 to oBar.Count - 1 do
+        oItems.AddElement( MenuItemToJSON( oBar.Items[ iItem ], iDepth - 1 ) );
+    except
+      oRes.Free;
+      raise;
+    end;
     Exit( oRes );
   end;
 
@@ -936,6 +938,106 @@ begin
 
 end;
 
+type
+  /// <summary>Where an enumeration callback hands back the window it found.</summary>
+  PWindowHandle = ^HWND;
+
+/// <summary><c>EnumThreadWindows</c> callback: stops at the first visible, enabled Win32 dialog (<c>#32770</c>) and hands it back.</summary>
+/// <param name="AWnd">The window.</param>
+/// <param name="AParam">Points to the <c>HWND</c> that receives it.</param>
+/// <returns>False once one is found, to end the enumeration.</returns>
+function EnumPromptProc( AWnd: HWND; AParam: LPARAM ): BOOL; stdcall;
+begin
+
+  Result := True;
+  if not ( IsWindowVisible( AWnd ) and IsWindowEnabled( AWnd ) ) then Exit;
+  var aClass: array[ 0..63 ] of Char;
+  aClass[ 0 ] := #0;
+  GetClassName( AWnd, aClass, Length( aClass ) );
+  if string( aClass ) = '#32770' then
+  begin
+    PWindowHandle( AParam )^ := AWnd;
+    Result := False;
+  end;
+
+end;
+
+/// <summary>
+///   The caption of the modal prompt the IDE is showing, if any: a VCL form shown modally (the debugger's
+///   exception notification, "Confirm") or a Win32 dialog of the main thread. Called on the main thread.
+/// </summary>
+/// <returns>The caption, '' when nothing is asking; <c>(untitled)</c> for a prompt with no caption.</returns>
+function ModalPromptCaption: string;
+begin
+
+  for var iForm := 0 to Screen.FormCount - 1 do
+  begin
+    var oForm := Screen.Forms[ iForm ];
+    if oForm.Visible and ( fsModal in oForm.FormState ) then
+      Exit( if oForm.Caption <> '' then oForm.Caption else '(untitled)' );
+  end;
+
+  var hPrompt: HWND := 0;
+  EnumThreadWindows( MainThreadID, @EnumPromptProc, LPARAM( @hPrompt ) );
+  if hPrompt = 0 then Exit( '' );
+  var aText: array[ 0..255 ] of Char;
+  aText[ 0 ] := #0;
+  GetWindowText( hPrompt, aText, Length( aText ) );
+  Result := if string( aText ) <> '' then string( aText ) else '(untitled)';
+
+end;
+
+/// <summary>
+///   Refuses to set the process going while the IDE is asking something. The debugger's exception notification
+///   leaves the process reading as stopped, yet a step or run issued meanwhile does nothing visible: the command
+///   waited out its timeout and answered <c>stopped:false</c>, and the process ran on once the box was answered
+///   (GxInspect, measured).
+/// </summary>
+/// <param name="AWhat">What was asked for, for the message.</param>
+/// <exception cref="EAutoError"><c>IdeAsking</c> while a modal prompt is up; <c>error.data</c> is its caption.</exception>
+procedure RefuseWhileIdeAsks( const AWhat: string );
+begin
+
+  var sCaption := ModalPromptCaption;
+  if sCaption <> '' then
+    raise EAutoError.CreateCodeData( 'IdeAsking', Format( 'The IDE is asking something ("%s"), and a %s does nothing until it ' +
+      'is answered; answer it with dialogs first', [ sCaption, AWhat ] ), TJSONString.Create( sCaption ) );
+
+end;
+
+/// <summary>
+///   Refuses to step the debugger's break-in thread. After a pause the current thread is the one Windows creates to
+///   break into the process (<c>ntdll.DbgUiRemoteBreakin</c>), which exists for that alone: stepping it lets the
+///   process run on, and the step answers <c>stopped:false</c> (GxInspect).
+/// </summary>
+/// <param name="AProcess">The stopped process.</param>
+/// <exception cref="EAutoError"><c>BreakInThread</c> when its current thread is the break-in thread.</exception>
+procedure RefuseBreakInThread( const AProcess: IOTAProcess );
+begin
+
+  var oThread := AProcess.CurrentThread;
+  if oThread = nil then Exit;
+
+  //  The top three frames: the break-in thread stops in DbgBreakPoint, called from DbgUiRemoteBreakin.  DbgBreakPoint
+  //  alone is not enough - a program thread calling DebugBreak stops there too.
+  var aTop: TArray<string> := [];
+  if oThread.StartCallStackAccess = csAccessible then
+  try
+    for var iFrame := 1 to Min( oThread.CallCount, 3 ) do
+      aTop := aTop + [ oThread.CallHeaders[ iFrame ] ];
+  finally
+    oThread.EndCallStackAccess;
+  end
+  else
+    oThread.EndCallStackAccess;
+
+  if IsBreakInStack( aTop ) then
+    raise EAutoError.CreateCode( 'BreakInThread', Format( 'The current thread %d is the debugger''s break-in thread (%s), and ' +
+      'stepping it lets the process run on; make one of the program''s threads current with debug_set_thread (debug_threads ' +
+      'lists them)', [ oThread.OSThreadID, string.Join( ' < ', aTop ) ] ) );
+
+end;
+
 /// <summary>
 ///   Sets the current process running in the given mode and, on this worker thread, waits for the
 ///   debugger to report the next stop. Run from a worker because the IDE processes debug events on its
@@ -948,9 +1050,14 @@ end;
 ///   Called on the main thread IN PLACE OF <c>IOTAProcess.Run</c>, for a start the process interface does
 ///   not do properly (run to cursor); nil to run in <paramref name="ARunMode"/>.
 /// </param>
+/// <param name="ARefuseBreakIn">True for a step, which must not step the debugger's break-in thread.</param>
 /// <returns><c>{ stopped, waitedMs, state, pid?, exe?, location? }</c>; <c>stopped</c> false means the wait ran out.</returns>
-/// <exception cref="EAutoError"><c>NoProcess</c> / <c>NotStopped</c>, or whatever <paramref name="AStart"/> raises.</exception>
-function RunAndWait( AReq: TJSONObject; ARunMode: TOTARunMode; ADefaultWaitMs: Integer; const AStart: TProc ): TJSONValue;
+/// <exception cref="EAutoError">
+///   <c>NoProcess</c> / <c>NotStopped</c>; <c>IdeAsking</c> while the IDE shows a modal prompt; <c>BreakInThread</c> (a step
+///   only); or whatever <paramref name="AStart"/> raises.
+/// </exception>
+function RunAndWait( AReq: TJSONObject; ARunMode: TOTARunMode; ADefaultWaitMs: Integer; const AStart: TProc;
+  ARefuseBreakIn: Boolean ): TJSONValue;
 begin
 
   var iWait := WaitArgument( AReq, ADefaultWaitMs );
@@ -960,6 +1067,9 @@ begin
     procedure
     begin
       var oProcess := RequireStoppedProcess;
+      RefuseWhileIdeAsks( 'run or step' );
+      if ARefuseBreakIn then
+        RefuseBreakInThread( oProcess );
       iGeneration := StopGeneration;
       if Assigned( AStart ) then
         AStart
@@ -1130,7 +1240,7 @@ end;
 function CmdDebugRun( AReq: TJSONObject ): TJSONValue;
 begin
 
-  Result := RunAndWait( AReq, ormRun, 0, nil );
+  Result := RunAndWait( AReq, ormRun, 0, nil, False );
 
 end;
 
@@ -1156,7 +1266,7 @@ begin
   else
     raise EAutoError.CreateCode( 'BadRequest', 'debug_step mode is over, into, out, toSource, instInto or instOver' );
 
-  Result := RunAndWait( AReq, eMode, STEP_WAIT_MS, nil );
+  Result := RunAndWait( AReq, eMode, STEP_WAIT_MS, nil, True );
 
 end;
 
@@ -1204,7 +1314,7 @@ begin
       oEditors.TopView.MoveViewToCursor;
       oEditors.TopView.Paint;
       oEditActions.RunToCursor;
-    end );
+    end, False );
 
 end;
 
@@ -1237,13 +1347,18 @@ begin
     iCurrent := oProcess.CurrentThread.OSThreadID;
 
   var oRes := TJSONObject.Create;
-  oRes.AddPair( 'pid', TJSONNumber.Create( Int64( oProcess.OSProcessId ) ) );
-  var oThreads := TJSONArray.Create;
-  oRes.AddPair( 'threads', oThreads );
-  for var iThread := 0 to oProcess.ThreadCount - 1 do
-  begin
-    var oThread := oProcess.Threads[ iThread ];
-    oThreads.AddElement( ThreadToJSON( oThread, oThread.OSThreadID = iCurrent ) );
+  try
+    oRes.AddPair( 'pid', TJSONNumber.Create( Int64( oProcess.OSProcessId ) ) );
+    var oThreads := TJSONArray.Create;
+    oRes.AddPair( 'threads', oThreads );
+    for var iThread := 0 to oProcess.ThreadCount - 1 do
+    begin
+      var oThread := oProcess.Threads[ iThread ];
+      oThreads.AddElement( ThreadToJSON( oThread, oThread.OSThreadID = iCurrent ) );
+    end;
+  except
+    oRes.Free;
+    raise;
   end;
   Result := oRes;
 
@@ -1292,27 +1407,33 @@ begin
 
   var oRes := TJSONObject.Create;
   try
-    var iCount := oThread.CallCount;
-    oRes.AddPair( 'thread', TJSONNumber.Create( Int64( oThread.OSThreadID ) ) );
-    oRes.AddPair( 'count', TJSONNumber.Create( iCount ) );
-    var oFrames := TJSONArray.Create;
-    oRes.AddPair( 'frames', oFrames );
-    //  Call headers are ONE-based.
-    for var iFrame := 1 to iCount do
-    begin
-      if iFrame > iMax then Break;
-      var sFile := '';
-      var iLine := 0;
-      oThread.GetCallPos( iFrame, sFile, iLine );
-      var oFrame := TJSONObject.Create;
-      oFrames.AddElement( oFrame );
-      oFrame.AddPair( 'index', TJSONNumber.Create( iFrame ) );
-      oFrame.AddPair( 'header', oThread.CallHeaders[ iFrame ] );
-      oFrame.AddPair( 'file', sFile );
-      oFrame.AddPair( 'line', TJSONNumber.Create( iLine ) );
+    try
+      var iCount := oThread.CallCount;
+      oRes.AddPair( 'thread', TJSONNumber.Create( Int64( oThread.OSThreadID ) ) );
+      oRes.AddPair( 'count', TJSONNumber.Create( iCount ) );
+      var oFrames := TJSONArray.Create;
+      oRes.AddPair( 'frames', oFrames );
+      //  Call headers are ONE-based.
+      for var iFrame := 1 to iCount do
+      begin
+        if iFrame > iMax then Break;
+        var sFile := '';
+        var iLine := 0;
+        oThread.GetCallPos( iFrame, sFile, iLine );
+        var oFrame := TJSONObject.Create;
+        oFrames.AddElement( oFrame );
+        oFrame.AddPair( 'index', TJSONNumber.Create( iFrame ) );
+        oFrame.AddPair( 'header', oThread.CallHeaders[ iFrame ] );
+        oFrame.AddPair( 'file', sFile );
+        oFrame.AddPair( 'line', TJSONNumber.Create( iLine ) );
+      end;
+    finally
+      oThread.EndCallStackAccess;
     end;
-  finally
-    oThread.EndCallStackAccess;
+  except
+    //  A frame the debugger cannot read raises; the half-built answer must not be left behind.
+    oRes.Free;
+    raise;
   end;
   Result := oRes;
 
@@ -1451,30 +1572,6 @@ begin
 
 end;
 
-/// <summary>Reads an address given as a number, as hex with <c>$</c> or <c>0x</c>, or as a decimal string.</summary>
-/// <param name="AReq">The request.</param>
-/// <returns>The address.</returns>
-/// <exception cref="EAutoError"><c>BadRequest</c> when it is missing or unreadable.</exception>
-function AddressArgument( AReq: TJSONObject ): UInt64;
-begin
-
-  var oValue := AReq.GetValue( 'address' );
-  if oValue is TJSONNumber then
-    Exit( UInt64( TJSONNumber( oValue ).AsInt64 ) );
-
-  var sText := '';
-  if oValue is TJSONString then
-    sText := Trim( TJSONString( oValue ).Value );
-  if sText.StartsWith( '0x', True ) then
-    sText := '$' + Copy( sText, 3, MaxInt );
-
-  var iValue: UInt64;
-  if ( sText = '' ) or not TryStrToUInt64( sText, iValue ) then
-    raise EAutoError.CreateCode( 'BadRequest', 'debug_memory needs "address": a number, or hex as $1234 or 0x1234' );
-  Result := iValue;
-
-end;
-
 /// <summary>
 ///   <c>debug_memory</c>: bytes of the stopped process's memory, read a page at a time, so a range that
 ///   runs into unreadable memory still returns everything up to there and says where it stopped.
@@ -1500,7 +1597,7 @@ begin
 
   var oProcess := RequireStoppedProcess;
   RequireReadableBitness( oProcess, 'memory' );
-  var iAddress := AddressArgument( AReq );
+  var iAddress := AddressArgument( AReq, 'address', 'debug_memory' );
   var iCount := OptInteger( AReq, 'count', MEMORY_DEFAULT );
   if iCount < 1 then iCount := 1;
   if iCount > MEMORY_MAX then iCount := MEMORY_MAX;
@@ -1611,18 +1708,44 @@ begin
 
 end;
 
-/// <summary>Describes a source breakpoint.</summary>
+/// <summary>
+///   Describes a source breakpoint: where it is, whether it is on, and whatever else is set on it - its condition,
+///   pass count and group, what it does when hit, and the debugger's exception choices.
+/// </summary>
 /// <param name="ABreakpoint">The breakpoint.</param>
-/// <returns><c>{ file, line, enabled, condition, passCount }</c>.</returns>
-function BreakpointToJSON( const ABreakpoint: IOTABreakpoint ): TJSONObject;
+/// <param name="ADebugging">True while a process is being debugged, the only time the debugger can say whether the line has code.</param>
+/// <returns>
+///   <c>{ file, line, enabled, condition, passCount, curPassCount, group, doBreak, logMessage, evalExpression, logResult,
+///   enableGroup, disableGroup, handleExceptions, ignoreExceptions, stackFramesToLog, threadCondition, validHere? }</c>.
+/// </returns>
+function BreakpointToJSON( const ABreakpoint: IOTABreakpoint; ADebugging: Boolean ): TJSONObject;
 begin
 
   Result := TJSONObject.Create;
-  Result.AddPair( 'file', ABreakpoint.FileName );
-  Result.AddPair( 'line', TJSONNumber.Create( ABreakpoint.LineNumber ) );
-  Result.AddPair( 'enabled', TJSONBool.Create( ABreakpoint.Enabled ) );
-  Result.AddPair( 'condition', ABreakpoint.Expression );
-  Result.AddPair( 'passCount', TJSONNumber.Create( ABreakpoint.PassCount ) );
+  try
+    Result.AddPair( 'file', ABreakpoint.FileName );
+    Result.AddPair( 'line', TJSONNumber.Create( ABreakpoint.LineNumber ) );
+    Result.AddPair( 'enabled', TJSONBool.Create( ABreakpoint.Enabled ) );
+    Result.AddPair( 'condition', ABreakpoint.Expression );
+    Result.AddPair( 'passCount', TJSONNumber.Create( ABreakpoint.PassCount ) );
+    Result.AddPair( 'curPassCount', TJSONNumber.Create( ABreakpoint.CurPassCount ) );
+    Result.AddPair( 'group', ABreakpoint.GroupName );
+    Result.AddPair( 'doBreak', TJSONBool.Create( ABreakpoint.DoBreak ) );
+    Result.AddPair( 'logMessage', ABreakpoint.LogMessage );
+    Result.AddPair( 'evalExpression', ABreakpoint.EvalExpression );
+    Result.AddPair( 'logResult', TJSONBool.Create( ABreakpoint.LogResult ) );
+    Result.AddPair( 'enableGroup', ABreakpoint.EnableGroup );
+    Result.AddPair( 'disableGroup', ABreakpoint.DisableGroup );
+    Result.AddPair( 'handleExceptions', TJSONBool.Create( ABreakpoint.DoHandleExceptions ) );
+    Result.AddPair( 'ignoreExceptions', TJSONBool.Create( ABreakpoint.DoIgnoreExceptions ) );
+    Result.AddPair( 'stackFramesToLog', TJSONNumber.Create( ABreakpoint.StackFramesToLog ) );
+    Result.AddPair( 'threadCondition', ABreakpoint.ThreadCondition );
+    if ADebugging then
+      Result.AddPair( 'validHere', TJSONBool.Create( ABreakpoint.ValidInCurrentProcess ) );
+  except
+    FreeAndNil( Result );
+    raise;
+  end;
 
 end;
 
@@ -1653,38 +1776,98 @@ function CmdDebugBreakpoints( AReq: TJSONObject ): TJSONValue;
 begin
 
   var oDebugger := DebuggerServices;
+  var bDebugging := oDebugger.ProcessCount > 0;
   var oRes := TJSONObject.Create;
-  var oList := TJSONArray.Create;
-  oRes.AddPair( 'breakpoints', oList );
-  for var iBreakpoint := 0 to oDebugger.SourceBkptCount - 1 do
-    oList.AddElement( BreakpointToJSON( oDebugger.SourceBkpts[ iBreakpoint ] ) );
+  try
+    var oList := TJSONArray.Create;
+    oRes.AddPair( 'breakpoints', oList );
+    for var iBreakpoint := 0 to oDebugger.SourceBkptCount - 1 do
+      oList.AddElement( BreakpointToJSON( oDebugger.SourceBkpts[ iBreakpoint ], bDebugging ) );
+  except
+    oRes.Free;
+    raise;
+  end;
   Result := oRes;
 
 end;
 
-/// <summary><c>debug_breakpoint_set</c>: sets a source breakpoint, or updates the one already on that line.</summary>
-/// <param name="AReq">The request: <c>file</c>, <c>line</c>, <c>condition?</c>, <c>passCount?</c>, <c>enabled?</c> (default true).</param>
-/// <returns>The breakpoint as <see cref="BreakpointToJSON"/> describes it.</returns>
-/// <exception cref="EAutoError"><c>BreakpointFailed</c> when the debugger declined to create it.</exception>
+/// <summary>
+///   <c>debug_breakpoint_set</c>: sets a source breakpoint, or updates the one already on that line. Every argument is
+///   read and checked BEFORE anything is created, so a bad one cannot leave a half-set breakpoint behind; an argument
+///   left out leaves that property as it is.
+/// </summary>
+/// <param name="AReq">
+///   The request: <c>file</c>, <c>line</c>, <c>enabled?</c> (default true), <c>condition?</c>, <c>passCount?</c>,
+///   <c>group?</c>, <c>doBreak?</c>, <c>logMessage?</c>, <c>evalExpression?</c>, <c>logResult?</c>, <c>enableGroup?</c>,
+///   <c>disableGroup?</c>, <c>handleExceptions?</c>, <c>ignoreExceptions?</c>, <c>stackFramesToLog?</c>,
+///   <c>threadCondition?</c> - the ToolsAPI's own properties under the names <c>debug_breakpoints</c> reports.
+/// </param>
+/// <returns>The breakpoint as <see cref="BreakpointToJSON"/> describes it, with a <c>note</c> while its line cannot be checked.</returns>
+/// <exception cref="EAutoError">
+///   <c>BadRequest</c> for an argument of the wrong type, or a negative pass count or frame count; <c>BreakpointFailed</c>
+///   when the debugger declined to create it.
+/// </exception>
+/// <remarks>
+///   A breakpoint on a line with no code is accepted, and the debugger rejects it only once the process runs (GxInspect),
+///   so a script would wait for a stop that cannot come. While a process is being debugged <c>validHere</c> says whether
+///   the line has code; otherwise the answer says it is not yet known.
+/// </remarks>
 function CmdDebugBreakpointSet( AReq: TJSONObject ): TJSONValue;
 begin
 
   var sFile := ResolveSourceFile( NeedString( AReq, 'file', 'debug_breakpoint_set' ) );
   var iLine := NeedInteger( AReq, 'line', 'debug_breakpoint_set' );
 
+  var bEnabled := OptBoolean( AReq, 'enabled', True );
+  var sCondition := OptString( AReq, 'condition', '' );
+  var iPassCount := OptInteger( AReq, 'passCount', 0 );
+  var sGroup := OptString( AReq, 'group', '' );
+  var bDoBreak := OptBoolean( AReq, 'doBreak', True );
+  var sLogMessage := OptString( AReq, 'logMessage', '' );
+  var sEvalExpression := OptString( AReq, 'evalExpression', '' );
+  var bLogResult := OptBoolean( AReq, 'logResult', False );
+  var sEnableGroup := OptString( AReq, 'enableGroup', '' );
+  var sDisableGroup := OptString( AReq, 'disableGroup', '' );
+  var bHandleExceptions := OptBoolean( AReq, 'handleExceptions', False );
+  var bIgnoreExceptions := OptBoolean( AReq, 'ignoreExceptions', False );
+  var iStackFrames := OptInteger( AReq, 'stackFramesToLog', 0 );
+  var sThreadCondition := OptString( AReq, 'threadCondition', '' );
+  if ( iPassCount < 0 ) or ( iStackFrames < 0 ) then
+    raise EAutoError.CreateCode( 'BadRequest', '"passCount" and "stackFramesToLog" are 0 for none, or more' );
+
+  var oDebugger := DebuggerServices;
   var oBreakpoint: IOTABreakpoint := FindSourceBreakpoint( sFile, iLine );
-  if oBreakpoint = nil then
-    oBreakpoint := DebuggerServices.NewSourceBreakpoint( sFile, iLine, nil );
+  var bCreated := oBreakpoint = nil;
+  if bCreated then
+    oBreakpoint := oDebugger.NewSourceBreakpoint( sFile, iLine, nil );
   if oBreakpoint = nil then
     raise EAutoError.CreateCode( 'BreakpointFailed', Format( 'The debugger set no breakpoint at %s line %d', [ sFile, iLine ] ) );
 
-  if AReq.GetValue( 'condition' ) <> nil then
-    oBreakpoint.Expression := OptString( AReq, 'condition', '' );
-  if AReq.GetValue( 'passCount' ) <> nil then
-    oBreakpoint.PassCount := OptInteger( AReq, 'passCount', 0 );
-  oBreakpoint.Enabled := OptBoolean( AReq, 'enabled', True );
+  if AReq.GetValue( 'condition' ) <> nil then oBreakpoint.Expression := sCondition;
+  if AReq.GetValue( 'passCount' ) <> nil then oBreakpoint.PassCount := iPassCount;
+  if AReq.GetValue( 'group' ) <> nil then oBreakpoint.GroupName := sGroup;
+  if AReq.GetValue( 'doBreak' ) <> nil then oBreakpoint.DoBreak := bDoBreak;
+  if AReq.GetValue( 'logMessage' ) <> nil then oBreakpoint.LogMessage := sLogMessage;
+  if AReq.GetValue( 'evalExpression' ) <> nil then oBreakpoint.EvalExpression := sEvalExpression;
+  if AReq.GetValue( 'logResult' ) <> nil then oBreakpoint.LogResult := bLogResult;
+  if AReq.GetValue( 'enableGroup' ) <> nil then oBreakpoint.EnableGroup := sEnableGroup;
+  if AReq.GetValue( 'disableGroup' ) <> nil then oBreakpoint.DisableGroup := sDisableGroup;
+  if AReq.GetValue( 'handleExceptions' ) <> nil then oBreakpoint.DoHandleExceptions := bHandleExceptions;
+  if AReq.GetValue( 'ignoreExceptions' ) <> nil then oBreakpoint.DoIgnoreExceptions := bIgnoreExceptions;
+  if AReq.GetValue( 'stackFramesToLog' ) <> nil then oBreakpoint.StackFramesToLog := iStackFrames;
+  if AReq.GetValue( 'threadCondition' ) <> nil then oBreakpoint.ThreadCondition := sThreadCondition;
+  //  Only when asked, or on a new breakpoint: changing the condition of a breakpoint switched off must not switch it on.
+  if bCreated or ( AReq.GetValue( 'enabled' ) <> nil ) then
+    oBreakpoint.Enabled := bEnabled;
 
-  Result := BreakpointToJSON( oBreakpoint );
+  var bDebugging := oDebugger.ProcessCount > 0;
+  var oRes := BreakpointToJSON( oBreakpoint, bDebugging );
+  if not bDebugging then
+    oRes.AddPair( 'note', 'Whether this line has code to stop on is known only once the process runs; the debugger ' +
+      'rejects a breakpoint on a line without code then' )
+  else if not oBreakpoint.ValidInCurrentProcess then
+    oRes.AddPair( 'note', 'The debugger reports no code on this line in the process being debugged, so it will not stop here' );
+  Result := oRes;
 
 end;
 
@@ -1710,6 +1893,1589 @@ begin
   oRes.AddPair( 'file', sFound );
   oRes.AddPair( 'line', TJSONNumber.Create( iLine ) );
   Result := oRes;
+
+end;
+
+{ ── Modules, files and projects ────────────────────────────────────────── }
+
+/// <summary>What kind of module the IDE has open. A project group answers to <c>IOTAProject</c> as well, so it is asked about first.</summary>
+/// <param name="AModule">The module.</param>
+/// <returns><c>projectGroup</c>, <c>project</c> or <c>module</c>.</returns>
+function ModuleKind( const AModule: IOTAModule ): string;
+begin
+
+  if Supports( AModule, IOTAProjectGroup ) then
+    Result := 'projectGroup'
+  else if Supports( AModule, IOTAProject ) then
+    Result := 'project'
+  else
+    Result := 'module';
+
+end;
+
+/// <summary>What an editor of a module is: the source, the form, or something else.</summary>
+/// <param name="AEditor">The editor.</param>
+/// <returns><c>source</c>, <c>form</c> or <c>other</c>.</returns>
+function EditorKind( const AEditor: IOTAEditor ): string;
+begin
+
+  if Supports( AEditor, IOTASourceEditor ) then
+    Result := 'source'
+  else if Supports( AEditor, IOTAFormEditor ) then
+    Result := 'form'
+  else
+    Result := 'other';
+
+end;
+
+/// <summary>Whether closing a module would stop and ask about unsaved work: an edited file, or changed project options.</summary>
+/// <param name="AModule">The module.</param>
+/// <returns>True when something of it is unsaved.</returns>
+function ModuleIsModified( const AModule: IOTAModule ): Boolean;
+begin
+
+  for var iFile := 0 to AModule.ModuleFileCount - 1 do
+  begin
+    var oEditor := AModule.ModuleFileEditors[ iFile ];
+    if Assigned( oEditor ) and oEditor.Modified then
+      Exit( True );
+  end;
+
+  var oProject: IOTAProject;
+  Result := Supports( AModule, IOTAProject, oProject ) and Assigned( oProject.ProjectOptions ) and
+    oProject.ProjectOptions.ModifiedState;
+
+end;
+
+/// <summary>A module's own file and its editors' files, which is what a file argument may name it by.</summary>
+/// <param name="AModule">The module; nil gives no names.</param>
+/// <returns>The file names, the module's own first.</returns>
+function ModuleFileNames( const AModule: IOTAModule ): TArray<string>;
+begin
+
+  Result := [];
+  if AModule = nil then Exit;
+  Result := [ AModule.FileName ];
+  for var iFile := 0 to AModule.ModuleFileCount - 1 do
+  begin
+    var oEditor := AModule.ModuleFileEditors[ iFile ];
+    if Assigned( oEditor ) then
+      Result := Result + [ oEditor.FileName ];
+  end;
+
+end;
+
+/// <summary>
+///   The open module a file argument names: <c>.</c> or nothing for the one in front, otherwise the ONE whose own file or
+///   one of whose editors' files matches, by path or by name alone (see <see cref="FindFileMatch"/>).
+/// </summary>
+/// <param name="AFileId">The argument.</param>
+/// <returns>The module.</returns>
+/// <exception cref="EAutoError">
+///   <c>NoModule</c> when nothing open matches; <c>Ambiguous</c> when a bare name matches several (with <c>Unit1.pas</c> open
+///   from two projects, the first used to be taken); <c>BadRequest</c> for a relative path.
+/// </exception>
+function FindModule( const AFileId: string ): IOTAModule;
+begin
+
+  var oServices := ModuleServices;
+  if IsCurrentFileId( AFileId ) then
+  begin
+    Result := oServices.CurrentModule;
+    if Result = nil then
+      raise EAutoError.CreateCode( 'NoModule', 'Nothing is open' );
+    Exit;
+  end;
+
+  var aModules: TArray<IOTAModule> := [];
+  var aNames: TArray<TArray<string>> := [];
+  for var iModule := 0 to oServices.ModuleCount - 1 do
+  begin
+    aModules := aModules + [ oServices.Modules[ iModule ] ];
+    aNames := aNames + [ ModuleFileNames( oServices.Modules[ iModule ] ) ];
+  end;
+  var iFound := FindFileMatch( aNames, Trim( AFileId ), False );
+  if iFound < 0 then
+    raise EAutoError.CreateCode( 'NoModule', Format( 'Nothing open is called %s; ide_modules lists what is', [ AFileId ] ) );
+  Result := aModules[ iFound ];
+
+end;
+
+/// <summary>
+///   Opens a file in the IDE without leaving the IDE in front of whatever had the focus: <c>OpenFile</c> brings the
+///   IDE forward, which a script driving another window does not want (GxInspect).
+/// </summary>
+/// <param name="AFile">The file.</param>
+/// <returns>What <c>IOTAActionServices.OpenFile</c> answered.</returns>
+/// <exception cref="EAutoError"><c>NoService</c> when the IDE offers no action services.</exception>
+function OpenFileKeepingForeground( const AFile: string ): Boolean;
+begin
+
+  var oActions: IOTAActionServices;
+  if not Supports( BorlandIDEServices, IOTAActionServices, oActions ) then
+    raise EAutoError.CreateCode( 'NoService', 'The IDE offers no action services' );
+  var hForeground := GetForegroundWindow;
+  Result := oActions.OpenFile( AFile );
+  if hForeground <> 0 then
+    SetForegroundWindow( hForeground );
+
+end;
+
+/// <summary>
+///   <c>ide_open_file</c>: opens a file in the IDE's editor, or brings it forward when it is open already.
+/// </summary>
+/// <param name="AReq">The request: <c>file</c>, a full path (forward slashes and surrounding quotes are accepted).</param>
+/// <returns><c>{ opened, current, modified }</c>: the file, the module now in front, and whether it is already marked modified.</returns>
+/// <exception cref="EAutoError">
+///   <c>NoFile</c> when it does not exist; <c>FormOpenAsText</c> when it is a unit whose <c>.dfm</c> is open as text - the
+///   IDE then raises <c>EModuleAbort</c> and opens the unit anyway, so the answer would say failure for something that
+///   happened (GxInspect); <c>OpenFailed</c> when the IDE declined or raised.
+/// </exception>
+/// <remarks>
+///   Opening is enough to mark a file modified: a project is upgraded on load and a form gains or loses defaults such as
+///   <c>OldCreateOrder</c>. <c>modified</c> says so, and <c>ide_quit</c> with <c>discard</c> is how to leave without
+///   writing that back.
+/// </remarks>
+function CmdIdeOpenFile( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var sFile := Trim( NeedString( AReq, 'file', 'ide_open_file' ) );
+  if ( Length( sFile ) >= 2 ) and sFile.StartsWith( '"' ) and sFile.EndsWith( '"' ) then
+    sFile := Copy( sFile, 2, Length( sFile ) - 2 );
+  sFile := StringReplace( sFile, '/', '\', [ rfReplaceAll ] );
+  //  A full path only: anything else would be resolved against the IDE's current folder, which nobody chose.
+  if ( ExtractFilePath( sFile ) = '' ) or IsRelativeFileId( sFile ) then
+    raise EAutoError.CreateCode( 'BadRequest', sFile + ' is not a full path' );
+  sFile := ExpandFileName( sFile );
+  if not FileExists( sFile ) then
+    raise EAutoError.CreateCode( 'NoFile', sFile + ' does not exist' );
+
+  if not IsFormFileName( sFile ) then
+  begin
+    var oServices := ModuleServices;
+    for var iModule := 0 to oServices.ModuleCount - 1 do
+    begin
+      var oModule := oServices.Modules[ iModule ];
+      if Assigned( oModule ) and IsFormFileName( oModule.FileName ) and
+        SameFileName( ChangeFileExt( oModule.FileName, '' ), ChangeFileExt( sFile, '' ) ) then
+        raise EAutoError.CreateCode( 'FormOpenAsText', Format( 'The form of %s is open as text (%s); ide_view_as_form it, ' +
+          'or ide_close_module it, first', [ sFile, oModule.FileName ] ) );
+    end;
+  end;
+
+  var bOpened: Boolean;
+  try
+    bOpened := OpenFileKeepingForeground( sFile );
+  except
+    //  Reported, not swallowed: the IDE refuses some opens by raising (EModuleAbort among them), and its message is
+    //  the only account of why.
+    on E: Exception do
+      raise EAutoError.CreateCode( 'OpenFailed', Format( 'The IDE did not open %s: %s: %s', [ sFile, E.ClassName, E.Message ] ) );
+  end;
+  if not bOpened then
+    raise EAutoError.CreateCode( 'OpenFailed', 'The IDE did not open ' + sFile );
+
+  var oRes := TJSONObject.Create;
+  try
+    oRes.AddPair( 'opened', sFile );
+    var oCurrent := ModuleServices.CurrentModule;
+    if Assigned( oCurrent ) then
+    begin
+      oRes.AddPair( 'current', oCurrent.FileName );
+      oRes.AddPair( 'modified', TJSONBool.Create( ModuleIsModified( oCurrent ) ) );
+    end
+    else
+      oRes.AddPair( 'current', TJSONNull.Create );
+  except
+    oRes.Free;
+    raise;
+  end;
+  Result := oRes;
+
+end;
+
+/// <summary><c>ide_modules</c>: everything the IDE has open, with the editors of each and whether it is unsaved.</summary>
+/// <param name="AReq">The request (no arguments).</param>
+/// <returns>
+///   <c>{ current, count, modules:[ { file, kind, modified, current, editors:[ { file, kind, modified } ] } ] }</c>. The
+///   editors are listed because their files are not always the module's: a form's <c>.dfm</c> has an editor of its own.
+/// </returns>
+function CmdIdeModules( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var oServices := ModuleServices;
+  var oCurrent := oServices.CurrentModule;
+  var oRes := TJSONObject.Create;
+  try
+    if Assigned( oCurrent ) then
+      oRes.AddPair( 'current', oCurrent.FileName )
+    else
+      oRes.AddPair( 'current', TJSONNull.Create );
+
+    var oModules := TJSONArray.Create;
+    oRes.AddPair( 'modules', oModules );
+    for var iModule := 0 to oServices.ModuleCount - 1 do
+    begin
+      var oModule := oServices.Modules[ iModule ];
+      if oModule = nil then Continue;
+      var oItem := TJSONObject.Create;
+      oModules.AddElement( oItem );
+      oItem.AddPair( 'file', oModule.FileName );
+      oItem.AddPair( 'kind', ModuleKind( oModule ) );
+      oItem.AddPair( 'modified', TJSONBool.Create( ModuleIsModified( oModule ) ) );
+      oItem.AddPair( 'current', TJSONBool.Create( Assigned( oCurrent ) and SameFileName( oCurrent.FileName, oModule.FileName ) ) );
+      var oEditors := TJSONArray.Create;
+      oItem.AddPair( 'editors', oEditors );
+      for var iFile := 0 to oModule.ModuleFileCount - 1 do
+      begin
+        var oEditor := oModule.ModuleFileEditors[ iFile ];
+        if oEditor = nil then Continue;
+        var oEdit := TJSONObject.Create;
+        oEditors.AddElement( oEdit );
+        oEdit.AddPair( 'file', oEditor.FileName );
+        oEdit.AddPair( 'kind', EditorKind( oEditor ) );
+        oEdit.AddPair( 'modified', TJSONBool.Create( oEditor.Modified ) );
+      end;
+    end;
+    oRes.AddPair( 'count', TJSONNumber.Create( oModules.Count ) );
+  except
+    oRes.Free;
+    raise;
+  end;
+  Result := oRes;
+
+end;
+
+/// <summary>Refuses to save a module that has never been saved: saving it would open Save As, which nobody would answer.</summary>
+/// <param name="AModule">The module.</param>
+/// <exception cref="EAutoError"><c>Untitled</c> when its file does not exist on disk.</exception>
+procedure RefuseUntitled( const AModule: IOTAModule );
+begin
+
+  if ( AModule.FileName = '' ) or not FileExists( AModule.FileName ) then
+    raise EAutoError.CreateCode( 'Untitled', AModule.FileName + ' has never been saved, and saving it would open Save As; ' +
+      'use discard' );
+
+end;
+
+/// <summary>
+///   The open modules that close together with a module: for a project its open units, for a project group the open
+///   projects and their open units, for anything else none.  Found by file name each time: a module must not be held
+///   across a close.
+/// </summary>
+/// <param name="AModule">The module being closed.</param>
+/// <returns>The file names of the open modules that close with it, itself not included.</returns>
+function FilesClosedWith( const AModule: IOTAModule ): TArray<string>;
+
+  procedure AddProject( const AProject: IOTAProject; var AFiles: TArray<string> );
+  begin
+
+    for var iUnit := 0 to AProject.GetModuleCount - 1 do
+    begin
+      var oInfo := AProject.GetModule( iUnit );
+      if ( oInfo = nil ) or ( oInfo.FileName = '' ) then Continue;
+      var oOpen := ModuleServices.FindModule( oInfo.FileName );
+      if Assigned( oOpen ) and not SameFileName( oOpen.FileName, AProject.FileName ) then
+        AFiles := AFiles + [ oOpen.FileName ];
+    end;
+
+  end;
+
+begin
+
+  Result := [];
+  var oGroup: IOTAProjectGroup;
+  var oProject: IOTAProject;
+  if Supports( AModule, IOTAProjectGroup, oGroup ) then
+  begin
+    for var iProject := 0 to oGroup.ProjectCount - 1 do
+      if Assigned( oGroup.Projects[ iProject ] ) then
+      begin
+        Result := Result + [ oGroup.Projects[ iProject ].FileName ];
+        AddProject( oGroup.Projects[ iProject ], Result );
+      end;
+  end
+  else if Supports( AModule, IOTAProject, oProject ) then
+    AddProject( oProject, Result );
+
+end;
+
+/// <summary>
+///   <c>ide_close_module</c>: closes one module, refusing one with unsaved changes unless told what to do with them -
+///   the IDE's "save changes?" box would otherwise wait for a person (the rule <c>ide_quit</c> follows too).  A project
+///   or project group closes its open units with it, so their unsaved changes count as its own, and its debug session
+///   would make the IDE ask whether to end it.
+/// </summary>
+/// <param name="AReq">The request: <c>file</c> (a path, a name, or <c>.</c>), <c>mode?</c> = <c>refuse</c> (default), <c>save</c> or <c>discard</c>.</param>
+/// <returns><c>{ closed, mode, saved?, discarded? }</c>; <c>saved</c> / <c>discarded</c> list the modules that were.</returns>
+/// <exception cref="EAutoError">
+///   <c>NoModule</c> / <c>Ambiguous</c>; <c>Modified</c> in refuse mode with something unsaved, listed in <c>error.data</c>;
+///   <c>Untitled</c> in save mode for a module never saved; <c>Debugging</c> for a project or group while anything is being
+///   debugged; <c>SaveFailed</c> / <c>CloseFailed</c> when the IDE declined; <c>BadRequest</c> for an unknown mode.
+/// </exception>
+function CmdIdeCloseModule( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var sMode := CloseModeArgument( AReq );
+  var oModule := FindModule( NeedString( AReq, 'file', 'ide_close_module' ) );
+  var sFile := oModule.FileName;
+  var aWith := FilesClosedWith( oModule );
+
+  var bProject := Supports( oModule, IOTAProject );
+  var oDebugger: IOTADebuggerServices;
+  if bProject and Supports( BorlandIDEServices, IOTADebuggerServices, oDebugger ) and ( oDebugger.ProcessCount > 0 ) then
+    raise EAutoError.CreateCode( 'Debugging', Format( 'The IDE is debugging %d process(es), and closing %s would stop and ask ' +
+      'whether to end the session; debug_terminate first', [ oDebugger.ProcessCount, sFile ] ) );
+
+  //  Everything that would be asked about: the module itself and what closes with it.
+  var aModified: TArray<string> := [];
+  for var sName in [ sFile ] + aWith do
+  begin
+    var oOpen := ModuleServices.FindModule( sName );
+    if Assigned( oOpen ) and ModuleIsModified( oOpen ) then
+      aModified := aModified + [ sName ];
+  end;
+
+  if ( sMode = 'refuse' ) and ( Length( aModified ) > 0 ) then
+  begin
+    var oData := TJSONArray.Create;
+    for var sName in aModified do
+      oData.Add( sName );
+    raise EAutoError.CreateCodeData( 'Modified', Format( '%d unsaved module(s) would close with %s, and closing would stop ' +
+      'and ask; use mode save or discard', [ Length( aModified ), sFile ] ), oData );
+  end;
+
+  var oRes := TJSONObject.Create;
+  try
+    oRes.AddPair( 'mode', sMode );
+    if sMode = 'save' then
+    begin
+      for var sName in aModified do
+        RefuseUntitled( ModuleServices.FindModule( sName ) );
+      var oSaved := TJSONArray.Create;
+      oRes.AddPair( 'saved', oSaved );
+      for var sName in aModified do
+      begin
+        var oOpen := ModuleServices.FindModule( sName );
+        if Assigned( oOpen ) and not oOpen.Save( False, True ) then
+          raise EAutoError.CreateCode( 'SaveFailed', 'The IDE did not save ' + sName );
+        oSaved.Add( sName );
+      end;
+    end
+    else if sMode = 'discard' then
+    begin
+      //  The units first, each forced shut on its own, so the project's close has nothing left to ask about.
+      var oDiscarded := TJSONArray.Create;
+      oRes.AddPair( 'discarded', oDiscarded );
+      for var sName in aModified do
+      begin
+        if SameFileName( sName, sFile ) then Continue;
+        var oOpen := ModuleServices.FindModule( sName );
+        if Assigned( oOpen ) and not oOpen.CloseModule( True ) then
+          raise EAutoError.CreateCode( 'CloseFailed', 'The IDE did not close ' + sName );
+        oDiscarded.Add( sName );
+      end;
+      if ModuleIsModified( oModule ) then
+        oDiscarded.Add( sFile );
+    end;
+
+    if not oModule.CloseModule( sMode = 'discard' ) then
+      raise EAutoError.CreateCode( 'CloseFailed', 'The IDE did not close ' + sFile );
+    oRes.AddPair( 'closed', sFile );
+  except
+    oRes.Free;
+    raise;
+  end;
+  Result := oRes;
+
+end;
+
+/// <summary><c>ide_save</c>: saves one module - for a form, its unit and its <c>.dfm</c> together.</summary>
+/// <param name="AReq">The request: <c>file?</c> (a path, a name, or <c>.</c> - the default - for the module in front).</param>
+/// <returns><c>{ saved, wasModified }</c>.</returns>
+/// <exception cref="EAutoError"><c>NoModule</c>; <c>Untitled</c> for a module never saved; <c>SaveFailed</c> when the IDE declined.</exception>
+function CmdIdeSave( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var oModule := FindModule( OptString( AReq, 'file', '.' ) );
+  RefuseUntitled( oModule );
+  var bWasModified := ModuleIsModified( oModule );
+  if not oModule.Save( False, True ) then
+    raise EAutoError.CreateCode( 'SaveFailed', 'The IDE did not save ' + oModule.FileName );
+
+  var oRes := TJSONObject.Create;
+  oRes.AddPair( 'saved', oModule.FileName );
+  oRes.AddPair( 'wasModified', TJSONBool.Create( bWasModified ) );
+  Result := oRes;
+
+end;
+
+/// <summary>The open project group. The IDE keeps one even round a single project, so this answers wherever a project is open.</summary>
+/// <returns>The group.</returns>
+/// <exception cref="EAutoError"><c>NoProject</c> when none is open.</exception>
+function RequireProjectGroup: IOTAProjectGroup;
+begin
+
+  Result := ModuleServices.MainProjectGroup;
+  if Result = nil then
+    raise EAutoError.CreateCode( 'NoProject', 'No project is open' );
+
+end;
+
+/// <summary>
+///   <c>ide_projects</c>: the projects of the open group and which is active - the one Compile, Run and the debugger act
+///   on. Ask this rather than reading the main window's caption, which lagged a switch (GxInspect).
+/// </summary>
+/// <param name="AReq">The request (no arguments).</param>
+/// <returns><c>{ group, active, count, projects:[ { file, active } ] }</c>.</returns>
+/// <exception cref="EAutoError"><c>NoProject</c> when nothing is open.</exception>
+function CmdIdeProjects( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var oGroup := RequireProjectGroup;
+  var oActive := oGroup.ActiveProject;
+  var oRes := TJSONObject.Create;
+  try
+    oRes.AddPair( 'group', oGroup.FileName );
+    if Assigned( oActive ) then
+      oRes.AddPair( 'active', oActive.FileName )
+    else
+      oRes.AddPair( 'active', TJSONNull.Create );
+    var oProjects := TJSONArray.Create;
+    oRes.AddPair( 'projects', oProjects );
+    for var iProject := 0 to oGroup.ProjectCount - 1 do
+    begin
+      var oProject := oGroup.Projects[ iProject ];
+      if oProject = nil then Continue;
+      var oItem := TJSONObject.Create;
+      oProjects.AddElement( oItem );
+      oItem.AddPair( 'file', oProject.FileName );
+      oItem.AddPair( 'active', TJSONBool.Create( Assigned( oActive ) and SameFileName( oActive.FileName, oProject.FileName ) ) );
+    end;
+    oRes.AddPair( 'count', TJSONNumber.Create( oProjects.Count ) );
+  except
+    oRes.Free;
+    raise;
+  end;
+  Result := oRes;
+
+end;
+
+/// <summary>
+///   <c>ide_set_project</c>: makes one project of the group the active one. Matched by path, by file name, then by name
+///   without extension.
+/// </summary>
+/// <param name="AReq">The request: <c>project</c>.</param>
+/// <returns><c>{ active, previous, note? }</c>.</returns>
+/// <exception cref="EAutoError"><c>NoProject</c> when no project of the group matches; the group's projects are in <c>error.data</c>.</exception>
+/// <remarks>
+///   Switching while the debugger has a process stopped cuts the debugger commands off from it - the current process
+///   follows the active project - until the project that was run is active again; the answer says so (GxInspect).
+/// </remarks>
+function CmdIdeSetProject( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var sWanted := NeedString( AReq, 'project', 'ide_set_project' );
+  var oGroup := RequireProjectGroup;
+
+  var aProjects: TArray<IOTAProject> := [];
+  var aNames: TArray<TArray<string>> := [];
+  for var iProject := 0 to oGroup.ProjectCount - 1 do
+  begin
+    aProjects := aProjects + [ oGroup.Projects[ iProject ] ];
+    if Assigned( oGroup.Projects[ iProject ] ) then
+      aNames := aNames + [ TArray<string>.Create( oGroup.Projects[ iProject ].FileName ) ]
+    else
+      aNames := aNames + [ TArray<string>.Create() ];
+  end;
+  var iFound := FindFileMatch( aNames, Trim( sWanted ), True );
+  var oFound: IOTAProject := nil;
+  if iFound >= 0 then
+    oFound := aProjects[ iFound ];
+
+  if oFound = nil then
+  begin
+    var oData := TJSONArray.Create;
+    for var iProject := 0 to oGroup.ProjectCount - 1 do
+      if Assigned( oGroup.Projects[ iProject ] ) then
+        oData.Add( oGroup.Projects[ iProject ].FileName );
+    raise EAutoError.CreateCodeData( 'NoProject', Format( 'The project group has no project %s', [ sWanted ] ), oData );
+  end;
+
+  var sPrevious := '';
+  if Assigned( oGroup.ActiveProject ) then
+    sPrevious := oGroup.ActiveProject.FileName;
+  oGroup.ActiveProject := oFound;
+
+  var oRes := TJSONObject.Create;
+  oRes.AddPair( 'active', oFound.FileName );
+  oRes.AddPair( 'previous', sPrevious );
+  var oDebugger: IOTADebuggerServices;
+  if Supports( BorlandIDEServices, IOTADebuggerServices, oDebugger ) and ( oDebugger.ProcessCount > 0 ) and
+    not SameFileName( sPrevious, oFound.FileName ) then
+    oRes.AddPair( 'note', 'The debugger''s current process follows the active project: until the project that was run is ' +
+      'active again, the debug_* commands answer NoProcess' );
+  Result := oRes;
+
+end;
+
+{ ── ide_actions / ide_action ───────────────────────────────────────────── }
+
+/// <summary>The IDE's action list, which is what its menus and tool bars are built on.</summary>
+/// <returns>The list.</returns>
+/// <exception cref="EAutoError"><c>NoService</c> when the IDE offers none.</exception>
+function IdeActionList: TCustomActionList;
+begin
+
+  var oServices: INTAServices;
+  if not Supports( BorlandIDEServices, INTAServices, oServices ) or ( oServices.ActionList = nil ) then
+    raise EAutoError.CreateCode( 'NoService', 'The IDE offers no action list' );
+  Result := oServices.ActionList;
+
+end;
+
+/// <summary>Describes an action: what to name it by, then what it looks like.</summary>
+/// <param name="AAction">The action.</param>
+/// <returns><c>{ name, caption, category, enabled, visible, checked, shortcut }</c>; all but <c>name</c> only for a <c>TCustomAction</c>.</returns>
+function ActionToJSON( AAction: TBasicAction ): TJSONObject;
+begin
+
+  Result := TJSONObject.Create;
+  Result.AddPair( 'name', AAction.Name );
+  if AAction is TCustomAction then
+  begin
+    var oAction := TCustomAction( AAction );
+    Result.AddPair( 'caption', oAction.Caption );
+    Result.AddPair( 'category', oAction.Category );
+    Result.AddPair( 'enabled', TJSONBool.Create( oAction.Enabled ) );
+    Result.AddPair( 'visible', TJSONBool.Create( oAction.Visible ) );
+    Result.AddPair( 'checked', TJSONBool.Create( oAction.Checked ) );
+    Result.AddPair( 'shortcut', ShortCutToText( oAction.ShortCut ) );
+  end;
+
+end;
+
+/// <summary>
+///   <c>ide_actions</c>: the IDE's actions, filtered by name, caption or category. <c>enabled</c> is only as fresh as the
+///   IDE's last idle pass - asked straight after a project was opened every Run action still said disabled (GxInspect) -
+///   which is why <c>ide_action</c> brings an action up to date before it decides.
+/// </summary>
+/// <param name="AReq">The request: <c>filter?</c>, <c>max?</c> (default 500, at most 5000).</param>
+/// <returns><c>{ matched, listed, actions:[ ... ] }</c>; <c>listed</c> is less than <c>matched</c> when <c>max</c> cut it short.</returns>
+/// <exception cref="EAutoError"><c>NoService</c> when the IDE offers no action list.</exception>
+function CmdIdeActions( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var sFilter := OptString( AReq, 'filter', '' );
+  var iMax := ClampInt( OptInteger( AReq, 'max', 500 ), 1, 5000 );
+  var oList := IdeActionList;
+
+  var oRes := TJSONObject.Create;
+  try
+    var oActions := TJSONArray.Create;
+    oRes.AddPair( 'actions', oActions );
+    var iMatched := 0;
+    for var iAction := 0 to oList.ActionCount - 1 do
+    begin
+      var oAction := oList.Actions[ iAction ];
+      if oAction = nil then Continue;
+      var sCaption := '';
+      var sCategory := '';
+      if oAction is TCustomAction then
+      begin
+        sCaption := TCustomAction( oAction ).Caption;
+        sCategory := TCustomAction( oAction ).Category;
+      end;
+      if not ActionMatchesFilter( oAction.Name, sCaption, sCategory, sFilter ) then Continue;
+      Inc( iMatched );
+      if oActions.Count < iMax then
+        oActions.AddElement( ActionToJSON( oAction ) );
+    end;
+    oRes.AddPair( 'matched', TJSONNumber.Create( iMatched ) );
+    oRes.AddPair( 'listed', TJSONNumber.Create( oActions.Count ) );
+  except
+    oRes.Free;
+    raise;
+  end;
+  Result := oRes;
+
+end;
+
+/// <summary>
+///   An IDE action by its component name: in the IDE's action list first, then among the components of its data modules
+///   and forms - the commands the IDE keeps in its own data modules (<c>DebugCommands</c>, with <c>ecToggleBreakpoint</c>)
+///   are not in <c>INTAServices</c>' list (GxInspect).
+/// </summary>
+/// <param name="AName">The name.</param>
+/// <returns>The action, or nil.</returns>
+function FindIdeAction( const AName: string ): TBasicAction;
+begin
+
+  var oList := IdeActionList;
+  for var iAction := 0 to oList.ActionCount - 1 do
+    if Assigned( oList.Actions[ iAction ] ) and SameText( oList.Actions[ iAction ].Name, AName ) then
+      Exit( oList.Actions[ iAction ] );
+
+  for var iModule := 0 to Screen.DataModuleCount - 1 do
+  begin
+    var oFound := Screen.DataModules[ iModule ].FindComponent( AName );
+    if oFound is TBasicAction then
+      Exit( TBasicAction( oFound ) );
+  end;
+  for var iForm := 0 to Screen.FormCount - 1 do
+  begin
+    var oFound := Screen.Forms[ iForm ].FindComponent( AName );
+    if oFound is TBasicAction then
+      Exit( TBasicAction( oFound ) );
+  end;
+  Result := nil;
+
+end;
+
+/// <summary>
+///   <c>ide_action</c>: executes one IDE action by name - the way to reach a menu command that has no command of its own
+///   here, Run (<c>RunRunCommand</c>) for one. It is brought up to date first and refused when disabled, since a disabled
+///   action is one whose preconditions are not met. It runs just after the answer, as <c>ide_menu_click</c> does, so an
+///   action that opens a dialog does not hold the answer up; ask <c>dialogs</c> next, and allow for time.
+/// </summary>
+/// <param name="AReq">The request: <c>name</c>.</param>
+/// <returns><c>{ executeScheduled:true, action }</c>, the action as <c>ide_actions</c> describes it.</returns>
+/// <exception cref="EAutoError"><c>NoAction</c> when there is no action of that name; <c>ActionDisabled</c> when it is disabled.</exception>
+function CmdIdeAction( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var sName := NeedString( AReq, 'name', 'ide_action' );
+  var oAction := FindIdeAction( sName );
+  if oAction = nil then
+    raise EAutoError.CreateCode( 'NoAction', Format( 'The IDE has no action %s; ide_actions lists them', [ sName ] ) );
+
+  oAction.Update;
+  if ( oAction is TCustomAction ) and not TCustomAction( oAction ).Enabled then
+    raise EAutoError.CreateCode( 'ActionDisabled', oAction.Name + ' is disabled just now' );
+
+  DeferToMainThread(
+    procedure
+    begin
+      //  Found again rather than captured: in the gap the IDE may have freed it (a project closed, a plug-in unloaded).
+      try
+        var oAgain := FindIdeAction( sName );
+        if Assigned( oAgain ) then
+        begin
+          oAgain.Update;
+          if not ( oAgain is TCustomAction ) or TCustomAction( oAgain ).Enabled then
+            oAgain.Execute;
+        end;
+      except
+        on EAutoError do ;   // the action list went away in the gap: there is nobody left to tell
+      end;
+    end );
+
+  var oRes := TJSONObject.Create;
+  oRes.AddPair( 'executeScheduled', TJSONBool.Create( True ) );
+  oRes.AddPair( 'action', ActionToJSON( oAction ) );
+  Result := oRes;
+
+end;
+
+{ ── Form designer ──────────────────────────────────────────────────────── }
+
+/// <summary>The form editor of a module, if it has one.</summary>
+/// <param name="AModule">The module.</param>
+/// <returns>The form editor, or nil.</returns>
+function FormEditorOf( const AModule: IOTAModule ): IOTAFormEditor;
+begin
+
+  Result := nil;
+  if AModule = nil then Exit;
+  for var iFile := 0 to AModule.ModuleFileCount - 1 do
+    if Supports( AModule.ModuleFileEditors[ iFile ], IOTAFormEditor, Result ) then
+      Exit;
+  Result := nil;
+
+end;
+
+/// <summary>Refuses a module that has no form editor, saying whether its form is open as text instead.</summary>
+/// <param name="AModule">The module.</param>
+/// <exception cref="EAutoError"><c>NoForm</c>, always.</exception>
+procedure RaiseNoForm( const AModule: IOTAModule );
+begin
+
+  if IsFormFileName( AModule.FileName ) then
+    raise EAutoError.CreateCode( 'NoForm', AModule.FileName + ' is shown as text; ide_view_as_form it first' );
+  raise EAutoError.CreateCode( 'NoForm', AModule.FileName + ' has no form' );
+
+end;
+
+/// <summary>
+///   The form editor a file argument names: the unit's name or the <c>.dfm</c>'s, either with a path, or <c>.</c> for the
+///   module in front. The exact name is tried first and the name without extension only when nothing answered to it, so
+///   a folder holding <c>Foo.pas</c> and an unrelated <c>Foo.dfm</c> cannot be matched by accident (GxInspect).
+/// </summary>
+/// <param name="AFileId">The argument.</param>
+/// <param name="AModule">Receives the module.</param>
+/// <returns>The form editor.</returns>
+/// <exception cref="EAutoError"><c>NoModule</c> when nothing open matches; <c>NoForm</c> when it has no form, or the form is shown as text.</exception>
+function FindFormEditor( const AFileId: string; out AModule: IOTAModule ): IOTAFormEditor;
+begin
+
+  if IsCurrentFileId( AFileId ) then
+  begin
+    AModule := FindModule( AFileId );
+    Result := FormEditorOf( AModule );
+    if Result = nil then
+      RaiseNoForm( AModule );
+    Exit;
+  end;
+
+  //  Only modules with a form are candidates; the others stay in the list with no names, so indexes line up.
+  var oServices := ModuleServices;
+  var aModules: TArray<IOTAModule> := [];
+  var aNames: TArray<TArray<string>> := [];
+  for var iModule := 0 to oServices.ModuleCount - 1 do
+  begin
+    var oModule := oServices.Modules[ iModule ];
+    var oForm := FormEditorOf( oModule );
+    aModules := aModules + [ oModule ];
+    if Assigned( oForm ) then
+      aNames := aNames + [ TArray<string>.Create( oForm.FileName, oModule.FileName ) ]
+    else
+      aNames := aNames + [ TArray<string>.Create() ];
+  end;
+  var iFound := FindFileMatch( aNames, Trim( AFileId ), True );
+  if iFound >= 0 then
+  begin
+    AModule := aModules[ iFound ];
+    Exit( FormEditorOf( AModule ) );
+  end;
+
+  AModule := FindModule( AFileId );
+  RaiseNoForm( AModule );
+  Result := nil;
+
+end;
+
+/// <summary>
+///   The form a form editor designs. The designer's root is the form itself for an ordinary form, and for a data module a
+///   component the hosting form owns.
+/// </summary>
+/// <param name="AFormEditor">The form editor.</param>
+/// <returns>The form.</returns>
+/// <exception cref="EAutoError"><c>NoDesigner</c> when the form is not loaded in the designer.</exception>
+function DesignFormOf( const AFormEditor: IOTAFormEditor ): TCustomForm;
+begin
+
+  var oNative: INTAFormEditor;
+  if not Supports( AFormEditor, INTAFormEditor, oNative ) or ( oNative.FormDesigner = nil ) then
+    raise EAutoError.CreateCode( 'NoDesigner', AFormEditor.FileName + ' is not loaded in the designer; ide_designer_show it' );
+
+  var oRoot := oNative.FormDesigner.Root;
+  if oRoot is TCustomForm then
+    Exit( TCustomForm( oRoot ) );
+  if Assigned( oRoot ) and ( oRoot.Owner is TCustomForm ) then
+    Exit( TCustomForm( oRoot.Owner ) );
+  raise EAutoError.CreateCode( 'NoDesigner', AFormEditor.FileName + ' has no designed form' );
+
+end;
+
+/// <summary>
+///   The component behind what the designer hands out: the handle is the object itself for the VCL designer. The
+///   interface is backed by a <c>TComponent</c> and not reference counted, so it is used here and never kept.
+/// </summary>
+/// <param name="AComponent">The designer's component.</param>
+/// <returns>The component, or nil when it is not one.</returns>
+function NativeComponentOf( const AComponent: IOTAComponent ): TComponent;
+begin
+
+  Result := nil;
+  if AComponent = nil then Exit;
+  var pHandle := AComponent.GetComponentHandle;
+  if ( pHandle <> nil ) and ( TObject( pHandle ) is TComponent ) then
+    Result := TComponent( pHandle );
+
+end;
+
+/// <summary>What the designer has selected. Nothing selected and the form selected are one state to it: the count is then 0.</summary>
+/// <param name="AFormEditor">The form editor.</param>
+/// <param name="AModule">Its module, for the answer.</param>
+/// <returns><c>{ file, form, count, selected:[ { name, class } ] }</c>.</returns>
+function SelectionToJSON( const AFormEditor: IOTAFormEditor; const AModule: IOTAModule ): TJSONObject;
+begin
+
+  Result := TJSONObject.Create;
+  try
+    Result.AddPair( 'file', AModule.FileName );
+    Result.AddPair( 'form', AFormEditor.FileName );
+    var oSelected := TJSONArray.Create;
+    Result.AddPair( 'selected', oSelected );
+    for var iSel := 0 to AFormEditor.GetSelCount - 1 do
+    begin
+      var oComp := NativeComponentOf( AFormEditor.GetSelComponent( iSel ) );
+      var oItem := TJSONObject.Create;
+      oSelected.AddElement( oItem );
+      if Assigned( oComp ) then
+      begin
+        oItem.AddPair( 'name', oComp.Name );
+        oItem.AddPair( 'class', oComp.ClassName );
+      end
+      else
+        oItem.AddPair( 'name', TJSONNull.Create );
+    end;
+    Result.AddPair( 'count', TJSONNumber.Create( oSelected.Count ) );
+  except
+    FreeAndNil( Result );
+    raise;
+  end;
+
+end;
+
+/// <summary>
+///   <c>ide_designer_show</c>: brings a form up in the designer. A file that is not open is opened first, when it exists.
+/// </summary>
+/// <param name="AReq">The request: <c>file?</c> - the unit or its <c>.dfm</c>, a path or a name, or <c>.</c> (the default) for the module in front.</param>
+/// <returns><c>{ file, form, root, class }</c>: the module, its form file, and the designed root component.</returns>
+/// <exception cref="EAutoError">
+///   <c>NoModule</c> when it is not open and cannot be opened; <c>NoForm</c> when it has no form, or the form is shown as
+///   text; <c>OpenFailed</c> as for <c>ide_open_file</c>.
+/// </exception>
+function CmdIdeDesignerShow( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var sFile := OptString( AReq, 'file', '.' );
+  var oModule: IOTAModule;
+  var oEditor: IOTAFormEditor;
+  try
+    oEditor := FindFormEditor( sFile, oModule );
+  except
+    on E: EAutoError do
+    begin
+      if ( E.Code <> 'NoModule' ) or IsCurrentFileId( sFile ) or not FileExists( sFile ) then
+        raise;
+      if not OpenFileKeepingForeground( ExpandFileName( sFile ) ) then
+        raise EAutoError.CreateCode( 'OpenFailed', 'The IDE did not open ' + sFile );
+      oEditor := FindFormEditor( sFile, oModule );
+    end;
+  end;
+
+  oEditor.Show;
+
+  var oRes := TJSONObject.Create;
+  oRes.AddPair( 'file', oModule.FileName );
+  oRes.AddPair( 'form', oEditor.FileName );
+  var oRoot := NativeComponentOf( oEditor.GetRootComponent );
+  if Assigned( oRoot ) then
+  begin
+    oRes.AddPair( 'root', oRoot.Name );
+    oRes.AddPair( 'class', oRoot.ClassName );
+  end;
+  Result := oRes;
+
+end;
+
+/// <summary>
+///   <c>ide_designer_screenshot</c>: renders the form in the designer to a PNG on the Desktop, as <c>screenshot</c> renders a
+///   control - legible, and right even when the designer is covered. Runs on the worker thread (the render must, see the
+///   server's <c>RenderControl</c>); the form is found on the main thread.
+/// </summary>
+/// <param name="AReq">The request: <c>file?</c> (as for <c>ide_designer_show</c>), <c>maxWidth?</c>.</param>
+/// <returns><c>{ path, width, height, area, target, renderer, file, sourceWidth?, sourceHeight? }</c>.</returns>
+/// <exception cref="EAutoError">
+///   <c>NoModule</c> / <c>NoForm</c> / <c>NoDesigner</c> as for the other designer commands; <c>NotShowing</c> when the
+///   designer is not on screen - <c>ide_designer_show</c> it first.
+/// </exception>
+function CmdIdeDesignerScreenshot( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var sFile := OptString( AReq, 'file', '.' );
+  var iMaxWidth := OptInteger( AReq, 'maxWidth', 0 );
+  var sModule := '';
+  var oRes := TAutomationServer.RenderControl(
+    function: TControl
+    begin
+      var oModule: IOTAModule;
+      var oForm := DesignFormOf( FindFormEditor( sFile, oModule ) );
+      sModule := oModule.FileName;
+      if not oForm.Showing then
+        raise EAutoError.CreateCode( 'NotShowing', oModule.FileName + ' is not on screen in the designer; ide_designer_show it first' );
+      Result := oForm;
+    end, iMaxWidth, 'DelphiIDE-designer' );
+  oRes.AddPair( 'file', sModule );
+  Result := oRes;
+
+end;
+
+/// <summary><c>ide_designer_selection</c>: what the form designer has selected.</summary>
+/// <param name="AReq">The request: <c>file?</c> (as for <c>ide_designer_show</c>).</param>
+/// <returns>As <see cref="SelectionToJSON"/>.</returns>
+/// <exception cref="EAutoError"><c>NoModule</c> / <c>NoForm</c>.</exception>
+function CmdIdeDesignerSelection( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var oModule: IOTAModule;
+  var oEditor := FindFormEditor( OptString( AReq, 'file', '.' ), oModule );
+  Result := SelectionToJSON( oEditor, oModule );
+
+end;
+
+/// <summary>
+///   <c>ide_designer_select</c>: selects components in the form designer, replacing the selection. Every name is found
+///   BEFORE anything is selected, so one wrong name cannot leave half a selection behind. Non-visual components are
+///   selected as readily as controls.
+/// </summary>
+/// <param name="AReq">The request: <c>file?</c>, <c>names</c> - an array of component names, or one string separated by commas.</param>
+/// <returns>The new selection, as <see cref="SelectionToJSON"/>.</returns>
+/// <exception cref="EAutoError">
+///   <c>BadRequest</c> for a missing, empty or repeated name; <c>NoComp</c> when a name is not on the form, every missing one
+///   in <c>error.data</c>; <c>NoModule</c> / <c>NoForm</c>.
+/// </exception>
+function CmdIdeDesignerSelect( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var aNames := NameListArgument( AReq, 'names', 'ide_designer_select' );
+  var oModule: IOTAModule;
+  var oEditor := FindFormEditor( OptString( AReq, 'file', '.' ), oModule );
+
+  var aFound: TArray<IOTAComponent>;
+  SetLength( aFound, Length( aNames ) );
+  var oMissing := TJSONArray.Create;
+  try
+    for var iName := 0 to High( aNames ) do
+    begin
+      aFound[ iName ] := oEditor.FindComponent( aNames[ iName ] );
+      if aFound[ iName ] = nil then
+        oMissing.Add( aNames[ iName ] );
+    end;
+    if oMissing.Count > 0 then
+    begin
+      var oData := oMissing;
+      oMissing := nil;
+      raise EAutoError.CreateCodeData( 'NoComp', Format( '%d of the names are not on %s; nothing was selected',
+        [ oData.Count, oEditor.FileName ] ), oData );
+    end;
+  finally
+    oMissing.Free;
+  end;
+
+  //  The first replaces whatever was selected, the rest are added to it.
+  for var iName := 0 to High( aFound ) do
+    aFound[ iName ].Select( iName > 0 );
+  aFound := nil;
+  oEditor.Show;
+
+  Result := SelectionToJSON( oEditor, oModule );
+
+end;
+
+/// <summary>
+///   <c>ide_designer_deselect</c>: selects the form itself, which is what the designer means by nothing selected - there
+///   is no state with neither the form nor a component selected (GxInspect).
+/// </summary>
+/// <param name="AReq">The request: <c>file?</c>.</param>
+/// <returns>The selection afterwards, as <see cref="SelectionToJSON"/>; its <c>count</c> is 0.</returns>
+/// <exception cref="EAutoError"><c>NoModule</c> / <c>NoForm</c>.</exception>
+function CmdIdeDesignerDeselect( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var oModule: IOTAModule;
+  var oEditor := FindFormEditor( OptString( AReq, 'file', '.' ), oModule );
+  var oRoot := oEditor.GetRootComponent;
+  if oRoot = nil then
+    raise EAutoError.CreateCode( 'NoForm', oEditor.FileName + ' has no root component' );
+  oRoot.Select( False );
+  oRoot := nil;
+  Result := SelectionToJSON( oEditor, oModule );
+
+end;
+
+{ ── ide_view_as_text / ide_view_as_form ────────────────────────────────── }
+
+type
+  /// <summary>
+  ///   How a form is open. View as Text and View as Form are not two views of one module: showing a form as text closes
+  ///   the unit and opens the <c>.dfm</c> as a module of its own, and going back closes that and opens the unit again
+  ///   (GxInspect).
+  /// </summary>
+  TFormView = record
+    /// <summary>True when the form is shown as the text of its <c>.dfm</c>.</summary>
+    IsText   : Boolean;
+    /// <summary>The module that is open: the unit in the designer view, the <c>.dfm</c> in the text view.</summary>
+    Module   : IOTAModule;
+    /// <summary>The form file, the <c>.dfm</c>, in either view.</summary>
+    FormFile : string;
+    /// <summary>The unit, empty while the form is shown as text.</summary>
+    UnitFile : string;
+  end;
+
+/// <summary>Whether an open module is one of the two sides of a form, and which.</summary>
+/// <param name="AModule">The module.</param>
+/// <param name="AView">Receives what it is; says nothing when this returns False.</param>
+/// <returns>True when it is a form, in either view.</returns>
+function DescribeFormView( const AModule: IOTAModule; out AView: TFormView ): Boolean;
+begin
+
+  var oForm := FormEditorOf( AModule );
+  if Assigned( oForm ) then
+  begin
+    AView.IsText := False;
+    AView.Module := AModule;
+    AView.FormFile := oForm.FileName;
+    AView.UnitFile := AModule.FileName;
+    Exit( True );
+  end;
+
+  Result := False;
+  if ( AModule = nil ) or not IsFormFileName( AModule.FileName ) then Exit;
+  for var iFile := 0 to AModule.ModuleFileCount - 1 do
+    if Supports( AModule.ModuleFileEditors[ iFile ], IOTASourceEditor ) then
+    begin
+      AView.IsText := True;
+      AView.Module := AModule;
+      AView.FormFile := AModule.FileName;
+      AView.UnitFile := '';
+      Exit( True );
+    end;
+
+end;
+
+/// <summary>
+///   The form a file argument names, in whichever view it is open: the unit's name or the <c>.dfm</c>'s, with or without a
+///   path, or <c>.</c>. Both are matched without their extension too, because only one of them is open at a time and a
+///   script should not have to say which; the exact name is tried first (GxInspect).
+/// </summary>
+/// <param name="AFileId">The argument.</param>
+/// <returns>The form's view.</returns>
+/// <exception cref="EAutoError"><c>NoModule</c> when nothing open matches; <c>NoForm</c> when what matches is not a form.</exception>
+function FindFormView( const AFileId: string ): TFormView;
+begin
+
+  if IsCurrentFileId( AFileId ) then
+  begin
+    var oCurrent := FindModule( AFileId );
+    if not DescribeFormView( oCurrent, Result ) then
+      raise EAutoError.CreateCode( 'NoForm', oCurrent.FileName + ' is not a form' );
+    Exit;
+  end;
+
+  var oServices := ModuleServices;
+  var aViews: TArray<TFormView> := [];
+  var aNames: TArray<TArray<string>> := [];
+  for var iModule := 0 to oServices.ModuleCount - 1 do
+  begin
+    var rView: TFormView;
+    if DescribeFormView( oServices.Modules[ iModule ], rView ) then
+    begin
+      aViews := aViews + [ rView ];
+      aNames := aNames + [ TArray<string>.Create( rView.FormFile, rView.UnitFile ) ];
+    end;
+  end;
+  var iFound := FindFileMatch( aNames, Trim( AFileId ), True );
+  if iFound >= 0 then
+    Exit( aViews[ iFound ] );
+
+  raise EAutoError.CreateCode( 'NoForm', FindModule( AFileId ).FileName + ' has no form' );
+
+end;
+
+/// <summary>
+///   Swaps a form between the designer and its text - the IDE's own Alt+F12. There is no call that sets either state, only
+///   one that swaps, and it acts on what the IDE has in front, so the form is brought forward first (GxInspect).
+/// </summary>
+/// <param name="AView">The form's view.</param>
+/// <exception cref="EAutoError"><c>NoEditor</c> when there is no editor or edit view to swap with.</exception>
+procedure SwapFormView( const AView: TFormView );
+begin
+
+  var oToShow: IOTAEditor := nil;
+  var oSource: IOTASourceEditor := nil;
+  for var iFile := 0 to AView.Module.ModuleFileCount - 1 do
+  begin
+    var oEditor := AView.Module.ModuleFileEditors[ iFile ];
+    if oEditor = nil then Continue;
+    if SameFileName( oEditor.FileName, AView.FormFile ) then
+      oToShow := oEditor;
+    var oAny: IOTASourceEditor;
+    if ( oSource = nil ) and Supports( oEditor, IOTASourceEditor, oAny ) then
+      oSource := oAny;
+  end;
+  if oToShow = nil then
+    raise EAutoError.CreateCode( 'NoEditor', 'The IDE has no editor for ' + AView.FormFile );
+  oToShow.Show;
+
+  var oView: IOTAEditView := nil;
+  if Assigned( oSource ) and ( oSource.EditViewCount > 0 ) then
+    oView := oSource.EditViews[ 0 ];
+  var oEditors: IOTAEditorServices;
+  if ( oView = nil ) and Supports( BorlandIDEServices, IOTAEditorServices, oEditors ) then
+    oView := oEditors.TopView;
+  var oActions: IOTAEditActions;
+  if ( oView = nil ) or not Supports( oView, IOTAEditActions, oActions ) then
+    raise EAutoError.CreateCode( 'NoEditor', 'The IDE has no edit view to swap ' + AView.FormFile + ' with' );
+  oActions.SwapSourceFormView;
+
+end;
+
+/// <summary>The common part of <c>ide_view_as_text</c> and <c>ide_view_as_form</c>: get to the view wanted, or say why not.</summary>
+/// <param name="AReq">The request: <c>file?</c>.</param>
+/// <param name="AWantText">True for the text view.</param>
+/// <returns><c>{ file, view, switched, note? }</c>.</returns>
+/// <exception cref="EAutoError">As <see cref="FindFormView"/> and <see cref="SwapFormView"/>.</exception>
+/// <remarks>
+///   The answer says the view was switched without looking: the IDE finishes the switch after this handler returns, and
+///   it is done by the time the next command runs. Unsaved changes are carried across, so they are not asked about.
+/// </remarks>
+function SetFormView( AReq: TJSONObject; AWantText: Boolean ): TJSONValue;
+begin
+
+  var rView := FindFormView( OptString( AReq, 'file', '.' ) );
+  var bSwitch := rView.IsText <> AWantText;
+  if bSwitch then
+    SwapFormView( rView );
+
+  var oRes := TJSONObject.Create;
+  oRes.AddPair( 'file', rView.FormFile );
+  oRes.AddPair( 'view', if AWantText then 'text' else 'form' );
+  oRes.AddPair( 'switched', TJSONBool.Create( bSwitch ) );
+  if bSwitch and AWantText then
+    oRes.AddPair( 'note', 'The unit is closed while its form is shown as text: name the .dfm, not the unit, until it is ' +
+      'shown as a form again' )
+  else if bSwitch then
+    oRes.AddPair( 'note', 'Text the IDE cannot read puts up a modal "Error creating form" box and closes the module, losing ' +
+      'the text; ask dialogs' );
+  Result := oRes;
+
+end;
+
+/// <summary><c>ide_view_as_text</c>: shows a form as the text of its <c>.dfm</c>.</summary>
+/// <param name="AReq">The request: <c>file?</c> - the unit or the <c>.dfm</c>, or <c>.</c>.</param>
+/// <returns>As <see cref="SetFormView"/>.</returns>
+function CmdIdeViewAsText( AReq: TJSONObject ): TJSONValue;
+begin
+
+  Result := SetFormView( AReq, True );
+
+end;
+
+/// <summary><c>ide_view_as_form</c>: shows a form in the designer again.</summary>
+/// <param name="AReq">The request: <c>file?</c> - the unit or the <c>.dfm</c>, or <c>.</c>.</param>
+/// <returns>As <see cref="SetFormView"/>.</returns>
+function CmdIdeViewAsForm( AReq: TJSONObject ): TJSONValue;
+begin
+
+  Result := SetFormView( AReq, False );
+
+end;
+
+{ ── debug_disasm ───────────────────────────────────────────────────────── }
+
+type
+  /// <summary>An address of the CPU window's events: Int64 since XE2, in either IDE bitness.</summary>
+  TCpuAddress = Int64;
+
+  /// <summary>
+  ///   The IDE's <c>TCPUSourcePos</c>: file index, line number and one more Integer, 12 bytes in Delphi 13's type
+  ///   information. A record of that size is passed by reference whether <c>var</c>, <c>const</c> or by value, so only the
+  ///   memory behind it has to be large enough; the padding makes sure it is should the IDE's grow (GxInspect).
+  /// </summary>
+  TCpuSourcePos = record
+    /// <summary>Which of the IDE's source files.</summary>
+    FileIndex : Integer;
+    /// <summary>The line in it.</summary>
+    LineNum   : Integer;
+    /// <summary>Not used here.</summary>
+    Param     : Integer;
+    /// <summary>Room for a larger record.</summary>
+    Reserved  : array[ 0..12 ] of Integer;
+  end;
+
+  /// <summary><c>TDisassemblerView.OnDisassemble</c>: disassembles one instruction; the text starts with its address.</summary>
+  TCpuDisassembleEvent = procedure( Sender: TObject; var Address: TCpuAddress; var Text: string; var InstSize: Integer ) of object;
+  /// <summary><c>TDisassemblerView.OnGetLabel</c>: the label at an address, if it has one.</summary>
+  TCpuGetLabelEvent = procedure( Sender: TObject; Address: TCpuAddress; var LabelText: string; var IsLabel: Boolean ) of object;
+  /// <summary><c>TDisassemblerView.OnFindSourceLine</c>: the source line an address belongs to, and where that line's code starts.</summary>
+  TCpuFindSourceLineEvent = procedure( Sender: TObject; Address: TCpuAddress; var FirstStat: TCpuAddress; var LineSize: Integer;
+    var SourcePos: TCpuSourcePos ) of object;
+  /// <summary><c>TDisassemblerView.OnGetSourceText</c>: the text of a source line.</summary>
+  TCpuGetSourceTextEvent = procedure( Sender: TObject; const SourcePos: TCpuSourcePos; var Text: string ) of object;
+  /// <summary><c>TDisassemblerView.OnGetFileName</c>: the file of a source line.</summary>
+  TCpuGetFileNameEvent = procedure( Sender: TObject; SourcePos: TCpuSourcePos; var FileName: string ) of object;
+
+  /// <summary>
+  ///   Disassembles the debugged process by calling the handlers the IDE has wired to the events of a
+  ///   <c>TDisassemblerView</c>, the hand-drawn control of the CPU window's code pane, which holds no text; the ToolsAPI has
+  ///   nothing for disassembly. They work for any address, whatever the view shows and whether it is visible. Each
+  ///   handler's declaration is read from its event's type information and compared before it is called. Ported from
+  ///   GxInspect's <c>TGxCpuDisassembler</c>.
+  /// </summary>
+  TCpuDisassembler = class
+  private
+    /// <summary>The CPU window's code pane.</summary>
+    FView           : TControl;
+    /// <summary>Its <c>OnDisassemble</c> handler.</summary>
+    FDisassemble    : TCpuDisassembleEvent;
+    /// <summary>Its <c>OnGetLabel</c> handler, when <see cref="FHasLabels"/>.</summary>
+    FGetLabel       : TCpuGetLabelEvent;
+    /// <summary>Its <c>OnFindSourceLine</c> handler, when <see cref="FHasSource"/>.</summary>
+    FFindSourceLine : TCpuFindSourceLineEvent;
+    /// <summary>Its <c>OnGetSourceText</c> handler, when <see cref="FHasSource"/>.</summary>
+    FGetSourceText  : TCpuGetSourceTextEvent;
+    /// <summary>Its <c>OnGetFileName</c> handler, when <see cref="FHasSource"/>.</summary>
+    FGetFileName    : TCpuGetFileNameEvent;
+    /// <summary>True when labels can be asked for.</summary>
+    FHasLabels      : Boolean;
+    /// <summary>True when source lines can be asked for.</summary>
+    FHasSource      : Boolean;
+    /// <summary>What is left out because the view has no handler for it.</summary>
+    FNotes          : TArray<string>;
+  public
+    /// <summary>Finds a CPU window's code pane and reads its handlers.</summary>
+    /// <exception cref="EAutoError">
+    ///   <c>NoCpuWindow</c> when there is none - it must have been opened once (<c>ide_action DebugCPUCommand</c>);
+    ///   <c>SignatureMismatch</c> when its <c>OnDisassemble</c> is not the shape it is called with.
+    /// </exception>
+    procedure Init;
+    /// <summary>Disassembles one instruction, with its label and the source line it starts, if any.</summary>
+    /// <param name="AAddress">Where the instruction starts.</param>
+    /// <param name="AFirst">True for the first one listed, which gets its source line even when the line starts earlier.</param>
+    /// <param name="AInstSize">Receives its size; 0 for memory that cannot be disassembled.</param>
+    /// <returns><c>{ text, label?, source?:{ file, line, text } }</c>; the caller adds the rest.</returns>
+    function Row( AAddress: Int64; AFirst: Boolean; out AInstSize: Integer ): TJSONObject;
+    /// <summary>What is left out because the view has no handler for it.</summary>
+    property Notes: TArray<string> read FNotes;
+  end;
+
+/// <summary>Whether an object's class, or one it descends from, has the given name - for an IDE class this unit cannot name.</summary>
+/// <param name="AObject">The object.</param>
+/// <param name="AClassName">The class name.</param>
+/// <returns>True when it inherits from a class of that name.</returns>
+function InheritsFromClassName( AObject: TObject; const AClassName: string ): Boolean;
+begin
+
+  var oClass := AObject.ClassType;
+  while Assigned( oClass ) do
+  begin
+    if SameText( oClass.ClassName, AClassName ) then
+      Exit( True );
+    oClass := oClass.ClassParent;
+  end;
+  Result := False;
+
+end;
+
+/// <summary>Reads the handler of one of the view's events, after checking that the event has the declaration it will be called with.</summary>
+/// <param name="AView">The view.</param>
+/// <param name="AEvent">The event, e.g. <c>OnDisassemble</c>.</param>
+/// <param name="AShape">The declaration expected, as <see cref="EventShape"/> gives it.</param>
+/// <param name="AMethod">Receives the handler.</param>
+/// <param name="AWhy">Receives why it cannot be called.</param>
+/// <returns>True when there is a handler of that declaration.</returns>
+function TryGetCpuHandler( AView: TObject; const AEvent, AShape: string; out AMethod: TMethod; out AWhy: string ): Boolean;
+begin
+
+  Result := False;
+  AMethod.Code := nil;
+  AMethod.Data := nil;
+  var pProp := GetPropInfo( AView, AEvent );
+  if ( pProp = nil ) or ( pProp.PropType^.Kind <> tkMethod ) then
+  begin
+    AWhy := AView.ClassName + ' has no ' + AEvent;
+    Exit;
+  end;
+  var sShape := EventShape( pProp.PropType^ );
+  if not SameText( sShape, AShape ) then
+  begin
+    AWhy := Format( '%s.%s takes ( %s ), not ( %s ) as expected, so it is not called', [ AView.ClassName, AEvent, sShape, AShape ] );
+    Exit;
+  end;
+  AMethod := GetMethodProp( AView, pProp );
+  if not Assigned( AMethod.Code ) then
+  begin
+    AWhy := AView.ClassName + '.' + AEvent + ' has no handler';
+    Exit;
+  end;
+  Result := True;
+
+end;
+
+/// <summary>
+///   Whether the IDE's <c>TCPUSourcePos</c>, as an event of the view declares it, can be passed as our padded record.
+///   Our record goes by reference only because it is larger than 8 bytes, and the IDE's must be too: a record of 8 bytes
+///   or fewer travels in a register in Win64, so a by-value parameter of one would be read as a pointer.  And ours must
+///   be at least as large, so the handler never reads past it.  The name alone cannot tell; its size, from RTTI, can.
+/// </summary>
+/// <param name="AView">The view.</param>
+/// <param name="AEvent">The event whose parameters include a <c>TCPUSourcePos</c>.</param>
+/// <param name="AWhy">Receives why it does not fit.</param>
+/// <returns>True when the IDE's record is over 8 bytes and no larger than <c>TCpuSourcePos</c>.</returns>
+function CpuSourcePosFits( AView: TObject; const AEvent: string; out AWhy: string ): Boolean;
+begin
+
+  Result := False;
+  AWhy := Format( '%s.%s has no type information for TCPUSourcePos', [ AView.ClassName, AEvent ] );
+  var pProp := GetPropInfo( AView, AEvent );
+  if pProp = nil then Exit;
+  var oContext := TRttiContext.Create;
+  try
+    var oType := oContext.GetType( pProp.PropType^ );
+    if oType is not TRttiMethodType then Exit;
+    for var oParam in TRttiMethodType( oType ).GetParameters do
+      if Assigned( oParam.ParamType ) and SameText( oParam.ParamType.Name, 'TCPUSourcePos' ) then
+      begin
+        var iSize := oParam.ParamType.TypeSize;
+        Result := ( iSize > 8 ) and ( iSize <= SizeOf( TCpuSourcePos ) );
+        if not Result then
+          AWhy := Format( 'the IDE''s TCPUSourcePos is %d bytes, which this unit cannot pass safely (it needs 9 to %d)',
+            [ iSize, SizeOf( TCpuSourcePos ) ] );
+        Exit;
+      end;
+  finally
+    oContext.Free;
+  end;
+
+end;
+
+/// <summary>Finds a <c>TDisassemblerView</c> with an <c>OnDisassemble</c> handler, hidden or not, among a control and its children.</summary>
+/// <param name="ACtl">Where to start.</param>
+/// <returns>The view, or nil.</returns>
+function FindCpuView( ACtl: TControl ): TControl;
+begin
+
+  if InheritsFromClassName( ACtl, 'TDisassemblerView' ) then
+  begin
+    var pProp := GetPropInfo( ACtl, 'OnDisassemble' );
+    if Assigned( pProp ) and ( pProp.PropType^.Kind = tkMethod ) and Assigned( GetMethodProp( ACtl, pProp ).Code ) then
+      Exit( ACtl );
+  end;
+
+  if ACtl is TWinControl then
+    for var iChild := 0 to TWinControl( ACtl ).ControlCount - 1 do
+    begin
+      Result := FindCpuView( TWinControl( ACtl ).Controls[ iChild ] );
+      if Assigned( Result ) then Exit;
+    end;
+  Result := nil;
+
+end;
+
+procedure TCpuDisassembler.Init;
+const
+  SHAPE_DISASSEMBLE = 'TObject; var Int64; var string; var Integer';
+begin
+
+  FView := nil;
+  for var iForm := 0 to Screen.FormCount - 1 do
+  begin
+    FView := FindCpuView( Screen.Forms[ iForm ] );
+    if Assigned( FView ) then Break;
+  end;
+  if FView = nil then
+    raise EAutoError.CreateCode( 'NoCpuWindow', 'There is no CPU window to disassemble with; open it once, with ide_action ' +
+      'DebugCPUCommand (the IDE opens it by itself when the process stops where there is no source)' );
+
+  var rMethod: TMethod;
+  var sWhy := '';
+  if not TryGetCpuHandler( FView, 'OnDisassemble', SHAPE_DISASSEMBLE, rMethod, sWhy ) then
+    raise EAutoError.CreateCode( 'SignatureMismatch', sWhy );
+  FDisassemble := TCpuDisassembleEvent( rMethod );
+
+  FNotes := [];
+  FHasLabels := TryGetCpuHandler( FView, 'OnGetLabel', 'TObject; Int64; var string; var Boolean', rMethod, sWhy );
+  if FHasLabels then
+    FGetLabel := TCpuGetLabelEvent( rMethod )
+  else
+    FNotes := FNotes + [ 'without labels: ' + sWhy ];
+
+  FHasSource := TryGetCpuHandler( FView, 'OnFindSourceLine', 'TObject; Int64; var Int64; var Integer; var TCPUSourcePos',
+    rMethod, sWhy );
+  if FHasSource then
+  begin
+    FFindSourceLine := TCpuFindSourceLineEvent( rMethod );
+    FHasSource := TryGetCpuHandler( FView, 'OnGetSourceText', 'TObject; const TCPUSourcePos; var string', rMethod, sWhy );
+    if FHasSource then
+    begin
+      FGetSourceText := TCpuGetSourceTextEvent( rMethod );
+      FHasSource := TryGetCpuHandler( FView, 'OnGetFileName', 'TObject; TCPUSourcePos; var string', rMethod, sWhy );
+      if FHasSource then
+        FGetFileName := TCpuGetFileNameEvent( rMethod );
+    end;
+  end;
+  //  Each event that takes the record, its declared size checked: the name matching is not enough.
+  for var sEvent in [ 'OnFindSourceLine', 'OnGetSourceText', 'OnGetFileName' ] do
+    if FHasSource and not CpuSourcePosFits( FView, sEvent, sWhy ) then
+      FHasSource := False;
+  if not FHasSource then
+    FNotes := FNotes + [ 'without source lines: ' + sWhy ];
+
+end;
+
+function TCpuDisassembler.Row( AAddress: Int64; AFirst: Boolean; out AInstSize: Integer ): TJSONObject;
+begin
+
+  Result := TJSONObject.Create;
+  try
+    if FHasLabels then
+    begin
+      var sLabel := '';
+      var bIsLabel := False;
+      FGetLabel( FView, AAddress, sLabel, bIsLabel );
+      if bIsLabel and ( sLabel <> '' ) then
+        Result.AddPair( 'label', sLabel );
+    end;
+
+    if FHasSource then
+    begin
+      var rPos: TCpuSourcePos;
+      FillChar( rPos, SizeOf( rPos ), 0 );
+      var iFirstStat: TCpuAddress := 0;
+      var iLineSize := 0;
+      FFindSourceLine( FView, AAddress, iFirstStat, iLineSize, rPos );
+      //  A line is given with its first instruction, and with the first one listed, so that a listing starting in the
+      //  middle of a line still says which one it is.
+      if ( iLineSize > 0 ) and ( ( iFirstStat = AAddress ) or AFirst ) then
+      begin
+        var sFile := '';
+        var sText := '';
+        FGetFileName( FView, rPos, sFile );
+        FGetSourceText( FView, rPos, sText );
+        var oSource := TJSONObject.Create;
+        Result.AddPair( 'source', oSource );
+        oSource.AddPair( 'file', sFile );
+        oSource.AddPair( 'line', TJSONNumber.Create( rPos.LineNum ) );
+        oSource.AddPair( 'text', Trim( sText ) );
+      end;
+    end;
+
+    var iAddress: TCpuAddress := AAddress;
+    var sText := '';
+    AInstSize := 0;
+    FDisassemble( FView, iAddress, sText, AInstSize );
+    Result.AddPair( 'text', TrimRight( sText ) );
+  except
+    FreeAndNil( Result );
+    raise;
+  end;
+
+end;
+
+/// <summary>
+///   <c>debug_disasm</c>: disassembles the stopped process the way the CPU window shows it - address, bytes and mnemonic in
+///   the IDE's own notation - with labels and source lines, from the current thread's instruction pointer or a given
+///   address.
+/// </summary>
+/// <param name="AReq">The request: <c>address?</c> (a number, <c>$hex</c> or <c>0xhex</c>; default the instruction pointer), <c>count?</c> (default 20, at most 1000), <c>thread?</c>.</param>
+/// <returns>
+///   <c>{ address, thread, bits, count, instructions:[ { address, size, text, current, label?, source? } ], notes, stoppedAt?, reason? }</c>;
+///   <c>current</c> marks the instruction the thread is at.
+/// </returns>
+/// <exception cref="EAutoError">
+///   <c>NoProcess</c> / <c>NotStopped</c>; <c>Unsupported</c> for a 32-bit process in the 64-bit IDE; <c>NoAddress</c> when
+///   no address is given and the instruction pointer cannot be read; <c>BadRequest</c> for an address beyond a 32-bit
+///   process's space; <c>NoCpuWindow</c> / <c>SignatureMismatch</c> from the disassembler; <c>Undisassemblable</c> when not
+///   even one instruction could be disassembled.
+/// </exception>
+/// <remarks>
+///   An address in the middle of an instruction is disassembled from there all the same, so the first lines are then
+///   rubbish; memory the IDE cannot disassemble (<c>????</c> in the CPU window) ends the listing, a few bytes early
+///   (GxInspect, measured).
+/// </remarks>
+function CmdDebugDisasm( AReq: TJSONObject ): TJSONValue;
+const
+  DISASM_DEFAULT = 20;
+  DISASM_MAX     = 1000;
+begin
+
+  var oProcess := RequireStoppedProcess;
+  var b64 := RequireReadableBitness( oProcess, 'disassembly' );
+  var oThread := ResolveThread( oProcess, AReq );
+  if oThread.State <> tsStopped then
+    raise EAutoError.CreateCode( 'NotStopped', Format( 'Thread %d is %s, not stopped',
+      [ oThread.OSThreadID, EnumText( TypeInfo( TOTAThreadState ), Ord( oThread.State ) ) ] ) );
+  var iCount := ClampInt( OptInteger( AReq, 'count', DISASM_DEFAULT ), 1, DISASM_MAX );
+
+  var bHasIp := False;
+  var iIp: Int64 := 0;
+  try
+    var rContext := oThread.OTAThreadContextEx;
+{$IFDEF CPUX86}
+    iIp := if b64 then Int64( rContext.win64.Rip ) else Int64( rContext.win32.Eip );
+{$ELSE}
+    iIp := Int64( rContext.win64.Rip );   // the 64-bit IDE refused a 32-bit process above
+{$ENDIF}
+    bHasIp := True;
+  except
+    //  Deliberately broad, and not hidden: a thread without a readable context only loses the default address and the
+    //  marker (bHasIp stays False), and a request that needed the default is refused below with NoAddress.
+    on Exception do ;
+  end;
+
+  var iAddress: Int64;
+  if AReq.GetValue( 'address' ) <> nil then
+    iAddress := Int64( AddressArgument( AReq, 'address', 'debug_disasm' ) )
+  else if bHasIp then
+    iAddress := iIp
+  else
+    raise EAutoError.CreateCode( 'NoAddress', Format( 'The instruction pointer of thread %d cannot be read; give an address',
+      [ oThread.OSThreadID ] ) );
+  if ( not b64 ) and ( UInt64( iAddress ) > $FFFFFFFF ) then
+    raise EAutoError.CreateCode( 'BadRequest', 'That address is beyond the address space of a 32-bit process' );
+
+  var oDisassembler := TCpuDisassembler.Create;
+  var oRes := TJSONObject.Create;
+  try
+    oDisassembler.Init;
+    oRes.AddPair( 'address', Hex64( UInt64( iAddress ) ) );
+    oRes.AddPair( 'thread', TJSONNumber.Create( Int64( oThread.OSThreadID ) ) );
+    oRes.AddPair( 'bits', TJSONNumber.Create( if b64 then 64 else 32 ) );
+    var oList := TJSONArray.Create;
+    oRes.AddPair( 'instructions', oList );
+
+    var iAt := iAddress;
+    var sReason := '';
+    while oList.Count < iCount do
+    begin
+      var iSize := 0;
+      var oRow: TJSONObject := nil;
+      try
+        oRow := oDisassembler.Row( iAt, oList.Count = 0, iSize );
+      except
+        //  Deliberately broad, and REPORTED in the answer: the IDE's handlers raise classes of their own for memory they
+        //  cannot read.
+        on E: Exception do
+          sReason := Format( '%s: %s', [ E.ClassName, E.Message ] );
+      end;
+      if ( oRow = nil ) or ( iSize <= 0 ) then
+      begin
+        oRow.Free;
+        if sReason = '' then
+          sReason := 'The IDE could not disassemble the memory there';
+        Break;
+      end;
+      oList.AddElement( oRow );
+      oRow.AddPair( 'address', Hex64( UInt64( iAt ) ) );
+      oRow.AddPair( 'size', TJSONNumber.Create( iSize ) );
+      oRow.AddPair( 'current', TJSONBool.Create( bHasIp and ( iAt = iIp ) ) );
+      Inc( iAt, iSize );
+    end;
+
+    if oList.Count = 0 then
+      raise EAutoError.CreateCode( 'Undisassemblable', Format( 'Nothing could be disassembled at %s: %s',
+        [ Hex64( UInt64( iAddress ) ), sReason ] ) );
+
+    oRes.AddPair( 'count', TJSONNumber.Create( oList.Count ) );
+    var oNotes := TJSONArray.Create;
+    oRes.AddPair( 'notes', oNotes );
+    for var sNote in oDisassembler.Notes do
+      oNotes.Add( sNote );
+    if oList.Count < iCount then
+    begin
+      oRes.AddPair( 'stoppedAt', Hex64( UInt64( iAt ) ) );
+      oRes.AddPair( 'reason', sReason );
+    end;
+    Result := oRes;
+  except
+    oRes.Free;
+    oDisassembler.Free;
+    raise;
+  end;
+  oDisassembler.Free;
 
 end;
 
@@ -1801,9 +3567,24 @@ begin
 
   TAutomationServer.RegisterCommand( 'tree_text', CmdTreeText );
   TAutomationServer.RegisterCommand( 'ide_modified', CmdIdeModified );
-  TAutomationServer.RegisterCommand( 'ide_quit', CmdIdeQuit );
+  TAutomationServer.RegisterCommand( 'ide_quit', CmdIdeQuit, actWorkerThread );
   TAutomationServer.RegisterCommand( 'ide_menu', CmdIdeMenu );
   TAutomationServer.RegisterCommand( 'ide_menu_click', CmdIdeMenuClick );
+  TAutomationServer.RegisterCommand( 'ide_open_file', CmdIdeOpenFile );
+  TAutomationServer.RegisterCommand( 'ide_modules', CmdIdeModules );
+  TAutomationServer.RegisterCommand( 'ide_close_module', CmdIdeCloseModule );
+  TAutomationServer.RegisterCommand( 'ide_save', CmdIdeSave );
+  TAutomationServer.RegisterCommand( 'ide_projects', CmdIdeProjects );
+  TAutomationServer.RegisterCommand( 'ide_set_project', CmdIdeSetProject );
+  TAutomationServer.RegisterCommand( 'ide_actions', CmdIdeActions );
+  TAutomationServer.RegisterCommand( 'ide_action', CmdIdeAction );
+  TAutomationServer.RegisterCommand( 'ide_designer_show', CmdIdeDesignerShow );
+  TAutomationServer.RegisterCommand( 'ide_designer_screenshot', CmdIdeDesignerScreenshot, actWorkerThread );
+  TAutomationServer.RegisterCommand( 'ide_designer_selection', CmdIdeDesignerSelection );
+  TAutomationServer.RegisterCommand( 'ide_designer_select', CmdIdeDesignerSelect );
+  TAutomationServer.RegisterCommand( 'ide_designer_deselect', CmdIdeDesignerDeselect );
+  TAutomationServer.RegisterCommand( 'ide_view_as_text', CmdIdeViewAsText );
+  TAutomationServer.RegisterCommand( 'ide_view_as_form', CmdIdeViewAsForm );
 
   TAutomationServer.RegisterCommand( 'debug_state', CmdDebugState );
   TAutomationServer.RegisterCommand( 'debug_attach', CmdDebugAttach );
@@ -1818,6 +3599,7 @@ begin
   TAutomationServer.RegisterCommand( 'debug_stack', CmdDebugStack );
   TAutomationServer.RegisterCommand( 'debug_registers', CmdDebugRegisters );
   TAutomationServer.RegisterCommand( 'debug_memory', CmdDebugMemory );
+  TAutomationServer.RegisterCommand( 'debug_disasm', CmdDebugDisasm );
   TAutomationServer.RegisterCommand( 'debug_eval', CmdDebugEval );
   TAutomationServer.RegisterCommand( 'debug_breakpoints', CmdDebugBreakpoints );
   TAutomationServer.RegisterCommand( 'debug_breakpoint_set', CmdDebugBreakpointSet );

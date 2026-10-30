@@ -3,9 +3,17 @@
 
     (C) 2026 Ian Branch (GITLAK Software). All rights reserved.
 
+    Portions derived from GExperts' GxInspect by Thomas Mueller (dummzeuch),
+    svn r6031, all from host\GxInspect_Server.pas: WndCanBeClicked (from
+    GxCanBeClicked), WndIsModal (from EnumDialogProc), ClickOutcome (the three
+    outcomes of CmdDismiss), WindowAtControlPoint (from TryGetWindowAtPoint)
+    and BuildDropHandle (from GxMakeHDrop).  Each is adapted to this unit's
+    commands and style.
+
     This code and all associated intellectual property, including proprietary
     algorithms and confidential information, are the exclusive property of Ian
-    Branch (GITLAK Software).
+    Branch (GITLAK Software), save the portions named above, which remain
+    subject to GExperts' own licence.
 
     Any reproduction, distribution, or use, in whole or in part, by any other
     party is strictly prohibited without the express written permission of the
@@ -23,6 +31,8 @@
 
   Author(s) :
   Ian Branch - GITLAK Software.
+  Co-developed: Thomas Mueller (dummzeuch) - GExperts' GxInspect, the portions
+  named above.
 
   ***************************************************************************
 *)
@@ -94,7 +104,7 @@ interface
 
 uses
   System.SysUtils, System.Classes, System.JSON,
-  Vcl.Forms;
+  Vcl.Controls, Vcl.Forms;
 
 type
   /// <summary>Command-level failure carrying a stable machine-readable code.</summary>
@@ -151,11 +161,14 @@ type
   public
     /// <summary>
     ///   Adds a command to the dispatcher. Built-in commands are matched first, so a registered
-    ///   name can never shadow one. Registering the same name again replaces the earlier handler.
+    ///   name can never shadow one. A name already registered is REFUSED (since 0.13): replacing it let a
+    ///   second provider take it over silently, and the first provider's unregister then removed the
+    ///   second's command.
     /// </summary>
     /// <param name="AName">The command name, matched without regard to case.</param>
     /// <param name="AHandler">The handler.</param>
     /// <param name="AThread">The thread the handler is called on.</param>
+    /// <exception cref="EArgumentException">An empty name, a nil handler, or a name already registered.</exception>
     class procedure RegisterCommand( const AName: string; const AHandler: TAutomationCommand;
       AThread: TAutomationCommandThread = actMainThread );
     /// <summary>Removes a registered command; unknown names are ignored.</summary>
@@ -187,6 +200,20 @@ type
     /// <returns>The component.</returns>
     /// <exception cref="EAutoError"><c>NoComp</c> when nothing matches; <c>Ambiguous</c> when a plain name matches several.</exception>
     class function ResolveComponent( ARequest: TJSONObject; AForm: TForm ): TComponent;
+    /// <summary>
+    ///   Renders a control to a PNG on the user's Desktop exactly as <c>screenshot</c> renders a named one - legible,
+    ///   and right even when the window is covered or off-screen - for a registered command whose target the
+    ///   built-in addressing cannot reach (the IDE's form designer).  Call it from an <c>actWorkerThread</c>
+    ///   handler: it synchronises <paramref name="AResolve"/> onto the main thread and renders on the calling one.
+    /// </summary>
+    /// <param name="AResolve">Finds the control; called on the main thread, once to plan and again only for the fallback renderer.</param>
+    /// <param name="AMaxWidth">Scale down to at most this width; 0 for none.</param>
+    /// <param name="AFileStem">The start of the PNG's file name, e.g. the host's name.</param>
+    /// <returns><c>{ path, width, height, area, target, renderer, sourceWidth?, sourceHeight? }</c>; the caller owns it.</returns>
+    /// <exception cref="EAutoError">
+    ///   <c>NotShowing</c> when the control is hidden or outside its window; whatever <paramref name="AResolve"/> raises.
+    /// </exception>
+    class function RenderControl( const AResolve: TFunc<TControl>; AMaxWidth: Integer; const AFileStem: string ): TJSONObject;
     /// <summary>Stops and frees the server (idempotent).</summary>
     class procedure Stop;
     /// <summary>True while the server is running.</summary>
@@ -198,12 +225,12 @@ type
 implementation
 
 uses
-  System.Types, System.IOUtils, System.DateUtils, System.Math,
+  System.Types, System.IOUtils, System.DateUtils, System.Math, System.Diagnostics,
   System.TypInfo, System.Variants, System.Generics.Collections,
   Winapi.Windows, Winapi.Messages, Winapi.MultiMon,
   System.SyncObjs,
   Data.DB,
-  Vcl.Controls, Vcl.Graphics, Vcl.Imaging.pngimage, Vcl.StdCtrls,
+  Vcl.Graphics, Vcl.Imaging.pngimage, Vcl.StdCtrls,
   //  Winapi.ShlObj + Winapi.KnownFolders resolve the REAL Desktop rather than assuming
   //  %USERPROFILE%\Desktop; IdIOHandler + IdExceptionCore give the request-line size policy.
   Winapi.ShlObj, Winapi.KnownFolders, Winapi.ActiveX,
@@ -215,15 +242,19 @@ const
   /// <summary>Number of consecutive ports probed from <c>AUTOMATION_PORT_BASE</c> before the bind attempt is abandoned.</summary>
   AUTOMATION_PORT_SPAN = 200; // ports to try before giving up
   /// <summary>Wire-protocol/feature version reported by the <c>ping</c>/<c>info</c> command's <c>server</c> field; bump when commands change.</summary>
-  SERVER_VERSION    = '0.12'; // + screenshot name/form render, maxWidth · 0.11: reachable/synthetic/path names, dotted props · 0.10: keys · 0.9: registered commands · 0.8: click count/stoppedReason · set changed/previous
+  SERVER_VERSION    = '0.13'; // + click_at, drop_files, dialogs hwnd/outcome/clickable/modal/texts · 0.12: screenshot name/form render, maxWidth · 0.11: reachable/synthetic/path names, dotted props · 0.10: keys · 0.9: registered commands · 0.8: click count/stoppedReason · set changed/previous
   /// <summary>Upper bound on <c>click</c>'s <c>count</c> (a mistyped count must not lock the UI thread for minutes).</summary>
   CLICK_COUNT_MAX   = 1000;
   /// <summary>Upper bound on the property list returned with a <c>NoProp</c> failure; the reply is read by an agent, so it stays bounded.</summary>
   PROPLIST_MAX      = 100;
-  /// <summary>How long a dialog click waits for the button's window to be destroyed before reporting <c>dismissed</c>.</summary>
-  DISMISS_WAIT_MS   = 750;
+  /// <summary>How long a dialog click waits for its window to go before reporting what came of it (GxInspect's measured 1.5 s).</summary>
+  DISMISS_WAIT_MS   = 1500;
   /// <summary>Polling step while waiting for a clicked dialog to close.</summary>
   DISMISS_POLL_MS   = 25;
+  /// <summary>Default of <c>dialogs</c>' <c>wait</c>: how long a click may stay queued or running before it is reported <c>pending</c>.</summary>
+  DIALOG_HANDLED_WAIT_MS = 5000;
+  /// <summary>The time a window's static texts may take to read between them, so a busy main thread cannot make a listing slow.</summary>
+  TEXTS_BUDGET_MS   = 500;
   // Fixed, account-independent discovery dir so the agent (which may resolve a
   // different %TEMP%, e.g. a service) and the app always agree. The MCP side
   // can override via settings.ini [Automation] DiscoveryDir.
@@ -1784,25 +1815,44 @@ end;
 
 { ── M-D: dialogs (Win32, off the VCL thread) ─────────────────────────────── }
 
-/// <summary>Returns a window's caption as a Delphi string, safely even when the window's owning thread is hung.</summary>
-/// <param name="AWnd">The window handle.</param>
-/// <returns>The window text; '' when empty, longer than 4096 chars, or the owning thread is hung / times out.</returns>
-function WndText( AWnd: HWND ): string;
 const
-  // Titles and button captions are short; the dialog body text is a Static child this
-  // unit never reads, so a fixed buffer is ample and avoids a hangable length query.
-  MAX_TEXT          = 4096;
+  /// <summary>The longest window text read, in characters; a longer one is cut there, and <see cref="WndTextRead"/> says so.</summary>
+  MAX_WND_TEXT      = 4096;
+
+/// <summary>
+///   Reads a window's text, safely even when the window's owning thread is hung, and says whether it was read in full.
+///   <c>GetWindowText</c> / <c>GetWindowTextLength</c> send <c>WM_GETTEXT(LENGTH)</c> to a same-process window with NO
+///   timeout, so a hung UI thread would deadlock this worker thread - the exact situation the off-thread
+///   <c>dialogs</c> command exists for - so it is read through <c>SendMessageTimeout</c> instead, into a fixed buffer
+///   (a length query could hang as well).
+/// </summary>
+/// <param name="AWnd">The window handle.</param>
+/// <param name="ATimeoutMs">How long the owning thread may take to answer.</param>
+/// <param name="AText">Receives the text, '' when it could not be read.</param>
+/// <param name="ATruncated">Receives True when the text filled the buffer, so it was probably cut at <c>MAX_WND_TEXT</c>.</param>
+/// <returns>False when the owning thread did not answer in time.</returns>
+function WndTextRead( AWnd: HWND; ATimeoutMs: UINT; out AText: string; out ATruncated: Boolean ): Boolean;
 begin
 
-  // GetWindowText/GetWindowTextLength send WM_GETTEXT(LENGTH) to a same-process window
-  // with NO timeout, so a hung UI thread would deadlock this worker thread — the exact
-  // situation the off-thread dialogs command exists for. Read via SendMessageTimeout
-  // (SMTO_ABORTIFHUNG) instead; a wedged window yields '' rather than a deadlock.
-  SetLength( Result, MAX_TEXT );
+  SetLength( AText, MAX_WND_TEXT );
   var iCopied: DWORD_PTR := 0;
-  if SendMessageTimeout( AWnd, WM_GETTEXT, MAX_TEXT, LPARAM( PChar( Result ) ), SMTO_ABORTIFHUNG, 2000, @iCopied ) = 0 then
-    Exit( '' );
-  SetLength( Result, iCopied );
+  Result            := SendMessageTimeout( AWnd, WM_GETTEXT, MAX_WND_TEXT, LPARAM( PChar( AText ) ), SMTO_ABORTIFHUNG, ATimeoutMs,
+    @iCopied ) <> 0;
+  if not Result then
+    iCopied         := 0;
+  SetLength( AText, iCopied );
+  ATruncated        := iCopied >= MAX_WND_TEXT - 1;
+
+end;
+
+/// <summary>Returns a window's caption or a control's text, as <see cref="WndTextRead"/> reads it with a 2 s timeout.</summary>
+/// <param name="AWnd">The window handle.</param>
+/// <returns>The window text; '' when empty or when the owning thread is hung or times out; cut at <c>MAX_WND_TEXT</c>.</returns>
+function WndText( AWnd: HWND ): string;
+begin
+
+  var bTruncated: Boolean;
+  WndTextRead( AWnd, 2000, Result, bTruncated );
 
 end;
 
@@ -1846,69 +1896,419 @@ begin
 
 end;
 
-/// <summary>Builds a JSON array of a window's <i>visible</i> button-class children (text + control id + enabled).</summary>
-/// <param name="ADlg">The dialog/window whose buttons to enumerate.</param>
-/// <returns>A new array of <c>{ text, id, enabled }</c>; hidden buttons (styled TaskDialog templates ship many) are skipped.</returns>
-function ButtonsOf( ADlg: HWND ): TJSONArray;
+/// <summary>Whether a window is of a button class, judged as the listing always has: its class name contains <c>button</c>.</summary>
+/// <param name="AWnd">The window.</param>
+/// <returns>True for <c>Button</c>, <c>TButton</c>, <c>TBitBtn</c>, a styled button and the like.</returns>
+function IsButtonWindow( AWnd: HWND ): Boolean;
 begin
 
-  Result            := TJSONArray.Create;
+  Result            := Pos( 'button', LowerCase( WndClass( AWnd ) ) ) > 0;
+
+end;
+
+/// <summary>
+///   Whether clicking a window could have any effect: it and every window it sits in visible and enabled.
+///   <c>IsWindowVisible</c> already answers for the whole chain, <c>IsWindowEnabled</c> only for the window
+///   asked about, and a button in a window that something modal is on top of is enabled in its own right while
+///   a user could not reach it.  The walk stops at the first window that is not a child, because
+///   <c>GetParent</c> answers for a top-level window with its OWNER - for a message box, the very window it
+///   disabled (GxInspect, <c>GxCanBeClicked</c>).
+/// </summary>
+/// <param name="AWnd">The window, usually a button.</param>
+/// <returns>True when a user could click it.</returns>
+function WndCanBeClicked( AWnd: HWND ): Boolean;
+begin
+
+  Result            := False;
+  if not IsWindowVisible( AWnd ) then Exit;
+
+  var hStep         := AWnd;
+  while hStep <> 0 do
+  begin
+    if not IsWindowEnabled( hStep ) then Exit;
+    if ( GetWindowLong( hStep, GWL_STYLE ) and WS_CHILD ) = 0 then Break;
+    hStep           := GetParent( hStep );
+  end;
+  Result            := True;
+
+end;
+
+/// <summary>
+///   Whether a top-level window is waiting to be answered: visible, enabled, and either of the dialog class
+///   (<c>#32770</c>) or owned by a window it has disabled, which is what modality looks like from outside and
+///   catches a VCL message form as well as a Win32 message box (GxInspect).
+/// </summary>
+/// <param name="AWnd">The top-level window.</param>
+/// <returns>True for a modal window a user could answer now.</returns>
+/// <remarks>
+///   A known limit, kept deliberately: a MODELESS window owned by the window a Win32 message box disabled answers True
+///   as well, since from outside it looks the same.  A sharper test (<c>GetLastActivePopup</c> of the owner) depends on
+///   which window was activated last, which a script cannot control.  The harm is bounded: <c>dialogs</c> prefers a
+///   modal match only when it is the only one, so two such windows are refused as ambiguous, never guessed between.
+/// </remarks>
+function WndIsModal( AWnd: HWND ): Boolean;
+begin
+
+  Result            := False;
+  if not ( IsWindowVisible( AWnd ) and IsWindowEnabled( AWnd ) ) then Exit;
+
+  var hOwner        := GetWindow( AWnd, GW_OWNER );
+  Result            := ( WndClass( AWnd ) = '#32770' ) or ( ( hOwner <> 0 ) and not IsWindowEnabled( hOwner ) );
+
+end;
+
+/// <summary>
+///   The SYSTEM class a window is built on, as <c>RealGetWindowClass</c> names it: <c>Button</c> for a VCL
+///   <c>TButton</c>, <c>Static</c> for a <c>TStaticText</c>, and the window's own class for a control that is not built on
+///   a system class.
+/// </summary>
+/// <param name="AWnd">The window.</param>
+/// <returns>The class name.</returns>
+function WndRealClass( AWnd: HWND ): string;
+begin
+
+  SetLength( Result, 256 );
+  SetLength( Result, RealGetWindowClass( AWnd, PChar( Result ), 256 ) );
+
+end;
+
+/// <summary>
+///   Whether a button window implements <c>BM_CLICK</c>: it is a standard Windows button, or a superclass of one
+///   such as the VCL's <c>TButton</c> and <c>TBitBtn</c>.  <c>RealGetWindowClass</c> names the system class a
+///   window is built on, so it answers <c>Button</c> for those and the control's own class for a custom-drawn
+///   one such as Ethea's <c>TStyledButton</c>, which keeps <c>button</c> in its class name but ignores
+///   <c>BM_CLICK</c>.
+/// </summary>
+/// <param name="AWnd">The button window.</param>
+/// <returns>True when <c>BM_CLICK</c> clicks it.</returns>
+function WndTakesBmClick( AWnd: HWND ): Boolean;
+begin
+
+  Result            := SameText( WndRealClass( AWnd ), 'Button' );
+
+end;
+
+/// <summary>A caption as a button is matched by: without its accelerator ampersands and surrounding space.</summary>
+/// <param name="ACaption">The caption.</param>
+/// <returns>The plain caption; compare it without case.</returns>
+function PlainButtonCaption( const ACaption: string ): string;
+begin
+
+  Result            := Trim( StringReplace( ACaption, '&', '', [ rfReplaceAll ] ) );
+
+end;
+
+/// <summary>The button-class children (at any depth) of a window, in enumeration order.</summary>
+/// <param name="AWnd">The window.</param>
+/// <returns>The button windows; hidden ones included, the caller decides.</returns>
+function ButtonWindowsOf( AWnd: HWND ): TArray<HWND>;
+begin
 
   var lst           := TList<HWND>.Create;
   try
-    EnumChildWindows( ADlg, @EnumChildProc, LPARAM( Pointer( lst ) ) );
-    for var hb in lst do
-    begin
-      if Pos( 'button', LowerCase( WndClass( hb ) ) ) = 0 then Continue;
-      // Styled TaskDialogs ship EVERY possible button as a hidden child — list
-      // only the ones actually on screen, else a click "succeeds" on a no-op.
-      if not IsWindowVisible( hb ) then Continue;
-      var oB        := TJSONObject.Create;
-      oB.AddPair( 'text', WndText( hb ) );
-      oB.AddPair( 'id', TJSONNumber.Create( GetDlgCtrlID( hb ) ) );
-      oB.AddPair( 'enabled', TJSONBool.Create( IsWindowEnabled( hb ) ) );
-      Result.AddElement( oB );
-    end;
+    EnumChildWindows( AWnd, @EnumChildProc, LPARAM( Pointer( lst ) ) );
+    for var iChild := lst.Count - 1 downto 0 do
+      if not IsButtonWindow( lst[ iChild ] ) then
+        lst.Delete( iChild );
+    Result          := lst.ToArray;
   finally
     lst.Free;
   end;
 
 end;
 
+/// <summary>Builds a JSON array of a window's <i>visible</i> button-class children.</summary>
+/// <param name="ADlg">The dialog/window whose buttons to enumerate.</param>
+/// <returns>
+///   A new array of <c>{ text, id, enabled, hwnd, clickable }</c>; hidden buttons (styled TaskDialog templates ship
+///   many) are skipped.  <c>enabled</c> is the button's own state; <c>clickable</c> also needs every window it sits
+///   in enabled.  <c>hwnd</c> names the button: the IDE's own Confirm box answers <c>GetDlgCtrlID</c> with 0.
+/// </returns>
+function ButtonsOf( ADlg: HWND ): TJSONArray;
+begin
+
+  Result            := TJSONArray.Create;
+  try
+    for var hb in ButtonWindowsOf( ADlg ) do
+    begin
+      // Styled TaskDialogs ship EVERY possible button as a hidden child — list
+      // only the ones actually on screen, else a click "succeeds" on a no-op.
+      if not IsWindowVisible( hb ) then Continue;
+      var oB        := TJSONObject.Create;
+      Result.AddElement( oB );
+      oB.AddPair( 'text', WndText( hb ) );
+      oB.AddPair( 'id', TJSONNumber.Create( GetDlgCtrlID( hb ) ) );
+      oB.AddPair( 'enabled', TJSONBool.Create( IsWindowEnabled( hb ) ) );
+      oB.AddPair( 'hwnd', TJSONNumber.Create( IntPtr( hb ) ) );
+      oB.AddPair( 'clickable', TJSONBool.Create( WndCanBeClicked( hb ) ) );
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+
+end;
+
 /// <summary>
-///   A click is attempted first with <c>BM_CLICK</c> and then, if the button survives it,
-///   with <c>WM_LBUTTONDOWN</c>/<c>WM_LBUTTONUP</c> - a custom-drawn control such as
-///   Ethea's <c>TStyledButton</c> keeps a window class containing 'button' but does not
-///   implement <c>BM_CLICK</c>. The reply carries <c>dismissed</c>, which reports whether
-///   the button window actually went away.
-///   <c>dialogs</c> command (Win32-only, runs OFF the VCL thread). With no
-///   <c>"button"</c> key it lists the open top-level windows and their visible
-///   button children; with a <c>"button"</c> it clicks the first visible+enabled
-///   button whose caption matches (case-insensitive, '&amp;' accelerators ignored).
-///   Safe while a modal loop blocks the main thread; the click is delivered via
-///   <c>SendMessageTimeout</c> (<c>SMTO_ABORTIFHUNG</c>) so a wedged UI can't deadlock the server.
+///   The text a window shows in static controls - a message box's message, a VCL <c>TStaticText</c> - matched by the
+///   system class they are built on (<see cref="WndRealClass"/>), since a VCL control's own class name is not
+///   <c>Static</c>.  The reads share one time budget, so a busy main thread cannot make a listing of many windows slow.
 /// </summary>
-/// <param name="AReq">The request object (<c>button?</c>).</param>
-/// <returns><c>{ windows:[…] }</c> (list) or <c>{ clicked, dialog }</c> (click).</returns>
-/// <remarks>Raises <c>EAutoError</c> —Code <c>NoButton</c> when no open dialog has a matching button.</remarks>
+/// <param name="ADlg">The window.</param>
+/// <param name="ABudgetMs">The time the reads may take between them.</param>
+/// <param name="AComplete">Receives False when the budget ran out before every text was read, or a text was cut at <c>MAX_WND_TEXT</c>.</param>
+/// <returns>A new array of the non-empty texts.</returns>
+/// <remarks>
+///   Read with <c>WM_GETTEXT</c>, so only WINDOWED text is found: a VCL <c>TLabel</c> (the message of a
+///   <c>TMessageForm</c>) has no window and cannot be read from this thread.
+/// </remarks>
+function TextsOf( ADlg: HWND; ABudgetMs: Integer; out AComplete: Boolean ): TJSONArray;
+begin
+
+  AComplete         := True;
+  Result            := TJSONArray.Create;
+  var lst           := TList<HWND>.Create;
+  try
+    EnumChildWindows( ADlg, @EnumChildProc, LPARAM( Pointer( lst ) ) );
+    var rWatch      := TStopwatch.StartNew;
+    for var hChild in lst do
+      if IsWindowVisible( hChild ) and SameText( WndRealClass( hChild ), 'Static' ) then
+      begin
+        var iLeft   := ABudgetMs - Integer( rWatch.ElapsedMilliseconds );
+        if iLeft <= 0 then
+        begin
+          AComplete := False;
+          Break;
+        end;
+        var sText   := '';
+        var bCut    := False;
+        if not WndTextRead( hChild, UINT( iLeft ), sText, bCut ) then
+        begin
+          AComplete := False;
+          Continue;
+        end;
+        if bCut then
+          AComplete := False;
+        if Trim( sText ) <> '' then
+          Result.Add( sText );
+      end;
+  finally
+    lst.Free;
+  end;
+
+end;
+
+/// <summary>Describes a button for an error's <c>error.data</c>: <c>{ hwnd, text, dialog, dialogHwnd, modal }</c>; pass <c>hwnd</c> back as <c>buttonHwnd</c>.</summary>
+/// <param name="AButton">The button.</param>
+/// <returns>A new object.</returns>
+function ButtonRef( AButton: HWND ): TJSONObject;
+begin
+
+  var hRoot         := GetAncestor( AButton, GA_ROOT );
+  Result            := TJSONObject.Create;
+  Result.AddPair( 'hwnd', TJSONNumber.Create( IntPtr( AButton ) ) );
+  Result.AddPair( 'text', WndText( AButton ) );
+  Result.AddPair( 'dialog', WndText( hRoot ) );
+  Result.AddPair( 'dialogHwnd', TJSONNumber.Create( IntPtr( hRoot ) ) );
+  Result.AddPair( 'modal', TJSONBool.Create( WndIsModal( hRoot ) ) );
+
+end;
+
+/// <summary>
+///   What became of a HANDLED click on a button of <paramref name="ADlg"/>, looked at for up to <c>DISMISS_WAIT_MS</c>
+///   rather than promised: <c>gone</c> (the window was destroyed or hidden - a VCL modal form is hidden when its modal
+///   result is set), <c>covered</c> (still up, with something modal on top of it), or <c>unchanged</c> (still up and
+///   enabled: nothing came of the click, or the button does not close its window).  Windows reuses handles, so
+///   <c>unchanged</c> means only that something is still waiting (GxInspect).  Timed by a stopwatch: counting
+///   <c>Sleep</c> steps overshoots, each lasting a timer tick rather than the time asked for.
+/// </summary>
+/// <param name="ADlg">The top-level window the button sits in.</param>
+/// <returns><c>gone</c>, <c>covered</c> or <c>unchanged</c>.</returns>
+function ClickOutcome( ADlg: HWND ): string;
+begin
+
+  var rWatch        := TStopwatch.StartNew;
+  repeat
+    if ( not IsWindow( ADlg ) ) or ( not IsWindowVisible( ADlg ) ) then Exit( 'gone' );
+    Sleep( DISMISS_POLL_MS );
+  until rWatch.ElapsedMilliseconds >= DISMISS_WAIT_MS;
+
+  Result            := if IsWindowEnabled( ADlg ) then 'unchanged' else 'covered';
+
+end;
+
+const
+  /// <summary>The message the click marker window answers; its <c>WParam</c> is the ticket.</summary>
+  WM_CLICKMARK      = WM_APP + $1D2;
+
+type
+  /// <summary>
+  ///   A hidden window of the MAIN thread that tells a worker when the main thread has handled a posted click.  Posted
+  ///   messages of one thread are retrieved in the order they were posted, so a marker posted straight after the click
+  ///   is handled only once the click's handler has returned - or once a modal loop the handler opened is pumping,
+  ///   which is when the click has had its effect too.  A SENT message could not do this: Windows delivers sent
+  ///   messages before posted ones.
+  /// </summary>
+  TClickMarkWindow = class
+  private
+    /// <summary>The window handle, from <c>AllocateHWnd</c>.</summary>
+    FHandle         : HWND;
+    /// <summary>The highest ticket handled so far; read and written through <c>TInterlocked</c>.</summary>
+    FSeen           : Integer;
+    /// <summary>The last ticket given out.</summary>
+    FIssued         : Integer;
+    /// <summary>Records a marker's ticket; everything else goes to <c>DefWindowProc</c>.</summary>
+    /// <param name="AMsg">The message.</param>
+    procedure WndProc( var AMsg: TMessage );
+  public
+    /// <summary>Creates the window; call on the main thread, so the window belongs to it.</summary>
+    constructor Create;
+    /// <summary>Destroys the window.</summary>
+    destructor Destroy; override;
+    /// <summary>Posts a marker behind whatever was posted to the main thread so far, and waits for it to be handled.</summary>
+    /// <param name="AWaitMs">How long to wait.</param>
+    /// <returns>True once the marker was handled; False when the wait ran out first.</returns>
+    function WaitForMainThread( AWaitMs: Integer ): Boolean;
+    /// <summary>The window, which belongs to the main thread: what <c>mainThreadBusy</c> asks.</summary>
+    property Handle: HWND read FHandle;
+  end;
+
+var
+  /// <summary>The click marker window, created by <c>TAutomationServer.Start</c> on the main thread; nil when started on another.</summary>
+  GClickMark        : TClickMarkWindow = nil;
+
+constructor TClickMarkWindow.Create;
+begin
+
+  inherited Create;
+  FHandle           := AllocateHWnd( WndProc );
+
+end;
+
+destructor TClickMarkWindow.Destroy;
+begin
+
+  DeallocateHWnd( FHandle );
+  inherited;
+
+end;
+
+procedure TClickMarkWindow.WndProc( var AMsg: TMessage );
+begin
+
+  if AMsg.Msg = WM_CLICKMARK then
+    TInterlocked.Exchange( FSeen, Integer( AMsg.WParam ) )
+  else
+    AMsg.Result     := DefWindowProc( FHandle, AMsg.Msg, AMsg.WParam, AMsg.LParam );
+
+end;
+
+function TClickMarkWindow.WaitForMainThread( AWaitMs: Integer ): Boolean;
+begin
+
+  var iTicket       := TInterlocked.Increment( FIssued );
+  if not PostMessage( FHandle, WM_CLICKMARK, WPARAM( iTicket ), 0 ) then
+    Exit( False );
+  var rWatch        := TStopwatch.StartNew;
+  repeat
+    if TInterlocked.CompareExchange( FSeen, 0, 0 ) >= iTicket then Exit( True );
+    Sleep( 10 );
+  until rWatch.ElapsedMilliseconds >= AWaitMs;
+  Result            := TInterlocked.CompareExchange( FSeen, 0, 0 ) >= iTicket;
+
+end;
+
+/// <summary>Reads a window handle argument of <c>dialogs</c>, if present.</summary>
+/// <param name="AReq">The request.</param>
+/// <param name="AKey">The argument's name.</param>
+/// <returns>The handle, or 0 when the argument is absent.</returns>
+/// <exception cref="EAutoError"><c>BadRequest</c> when it is present but not a number; <c>NoWindow</c> when it is not a window of this process.</exception>
+function DialogsHandleArg( AReq: TJSONObject; const AKey: string ): HWND;
+begin
+
+  var oValue        := AReq.GetValue( AKey );
+  if oValue = nil then Exit( 0 );
+  if oValue is not TJSONNumber then
+    raise EAutoError.CreateCode( 'BadRequest', Format( '"%s" must be a window handle, as dialogs lists it', [ AKey ] ) );
+  Result            := HWND( TJSONNumber( oValue ).AsInt64 );
+  var iPid: DWORD   := 0;
+  if IsWindow( Result ) then
+    GetWindowThreadProcessId( Result, iPid );
+  if iPid <> GetCurrentProcessId then
+    raise EAutoError.CreateCode( 'NoWindow', Format( '%s %d is not a window of this process; ask dialogs again, handles do not last',
+      [ AKey, IntPtr( Result ) ] ) );
+
+end;
+
+/// <summary>
+///   <c>dialogs</c> command (Win32-only, runs OFF the VCL thread).  With neither <c>"button"</c> nor <c>"buttonHwnd"</c> it
+///   lists the open top-level windows, each with its buttons, its static texts and whether it is modal.  With a
+///   <c>"button"</c> it clicks the ONE button whose caption matches (case-insensitive, '&amp;' accelerators ignored) and
+///   that a user could click; <c>"hwnd"</c> narrows the search to one top-level window, and <c>"buttonHwnd"</c> names the
+///   button itself.  Safe while a modal loop blocks the main thread.
+/// </summary>
+/// <param name="AReq">The request object (<c>button?</c>, <c>buttonHwnd?</c>, <c>hwnd?</c>, <c>modalOnly?</c>, <c>wait?</c>).</param>
+/// <returns>
+///   <c>{ windows:[ { hwnd, class, caption, owned, enabled, modal, texts, textsComplete, buttons } ], mainThreadBusy }</c>
+///   (list) or <c>{ clicked, dialog, hwnd, buttonHwnd, dismissed, outcome, method }</c> (click).
+/// </returns>
+/// <exception cref="EAutoError">
+///   <c>NoButton</c> when no open window has a button of that caption; <c>NotClickable</c> when the only ones are hidden
+///   or disabled or sit in a disabled window (one with a modal on top); <c>AmbiguousButton</c> when several could be
+///   clicked and not exactly one of them is in a modal window, listed in <c>error.data</c>; <c>NoWindow</c> when
+///   <c>hwnd</c> is not a top-level window of this process or <c>buttonHwnd</c> not a button of it; <c>BadRequest</c> for
+///   a handle that is not a number, or a <c>buttonHwnd</c> outside the <c>hwnd</c> given.
+/// </exception>
+/// <remarks>
+///   The click is POSTED, once: <c>BM_CLICK</c> to a button that implements it, the mouse messages to one that does not
+///   (a custom-drawn <c>TStyledButton</c>), never both.  The outcome is judged once the main thread has HANDLED the
+///   click - a marker posted behind it says so - for up to <c>wait</c> ms (default 5000); a click still queued or
+///   running then answers <c>pending</c>, never <c>unchanged</c>.  Until 0.13 <c>BM_CLICK</c> was sent and the mouse
+///   messages sent after it as well, so a button that does not close its window ran twice.
+/// </remarks>
 function AutoCmdDialogs( AReq: TJSONObject ): TJSONValue;
 begin
 
   var sButton       := AReq.GetValue<string>( 'button', '' );
+  var bModalOnly    := AReq.GetValue<Boolean>( 'modalOnly', False );
+  var iWait         := Min( Max( AReq.GetValue<Integer>( 'wait', DIALOG_HANDLED_WAIT_MS ), 0 ), 60000 );
+
+  var hOnly         := DialogsHandleArg( AReq, 'hwnd' );
+  if ( hOnly <> 0 ) and ( GetAncestor( hOnly, GA_ROOT ) <> hOnly ) then
+    raise EAutoError.CreateCode( 'NoWindow', Format( 'hwnd %d is not a top-level window; ask dialogs again', [ IntPtr( hOnly ) ] ) );
+  var hNamed        := DialogsHandleArg( AReq, 'buttonHwnd' );
+  if ( hNamed <> 0 ) and not IsButtonWindow( hNamed ) then
+    raise EAutoError.CreateCode( 'NoWindow', Format( 'buttonHwnd %d is not a button; ask dialogs again', [ IntPtr( hNamed ) ] ) );
+  if ( hNamed <> 0 ) and ( hOnly <> 0 ) and ( GetAncestor( hNamed, GA_ROOT ) <> hOnly ) then
+    raise EAutoError.CreateCode( 'BadRequest', 'buttonHwnd is not a button of the window hwnd names' );
 
   var tops          := TList<HWND>.Create;
   try
-    EnumWindows( @EnumTopProc, LPARAM( Pointer( tops ) ) );
+    if hOnly <> 0 then
+      tops.Add( hOnly )
+    else
+      EnumWindows( @EnumTopProc, LPARAM( Pointer( tops ) ) );
 
-    if sButton = '' then
+    if ( sButton = '' ) and ( hNamed = 0 ) then
     begin
-      //  parented before filling, for the reason given in AutoCmdTree.
       var oRes      := TJSONObject.Create;
       try
+        //  Asked FIRST: a main thread that does not answer within half a second is busy, so a dialog may be on its way
+        //  that is not up yet (the first Tools > Options of an IDE takes seconds) - an empty list then means "ask
+        //  again".  Asked after the listing it would only measure whether the thread had caught up meanwhile.
+        //  Asked of the click marker, a window of the main thread in every host: a console host has no
+        //  Application.Handle, which made the answer always "not busy" there.
+        var hProbe: HWND := if Assigned( GClickMark ) then GClickMark.Handle else Application.Handle;
+        var iDummy: DWORD_PTR := 0;
+        var bBusy   := ( hProbe <> 0 ) and
+          ( SendMessageTimeout( hProbe, WM_NULL, 0, 0, SMTO_ABORTIFHUNG, 500, @iDummy ) = 0 );
+        //  parented before filling, for the reason given in AutoCmdTree.
         var oArr    := TJSONArray.Create;
         oRes.AddPair( 'windows', oArr );
         for var hw in tops do
         begin
+          var bModal := WndIsModal( hw );
+          if bModalOnly and not bModal then Continue;
           var oD := TJSONObject.Create;
           oArr.AddElement( oD );
           oD.AddPair( 'hwnd', TJSONNumber.Create( IntPtr( hw ) ) );
@@ -1916,8 +2316,13 @@ begin
           oD.AddPair( 'caption', WndText( hw ) );
           oD.AddPair( 'owned', TJSONBool.Create( GetWindow( hw, GW_OWNER ) <> 0 ) );
           oD.AddPair( 'enabled', TJSONBool.Create( IsWindowEnabled( hw ) ) );
+          oD.AddPair( 'modal', TJSONBool.Create( bModal ) );
+          var bComplete: Boolean;
+          oD.AddPair( 'texts', TextsOf( hw, TEXTS_BUDGET_MS, bComplete ) );
+          oD.AddPair( 'textsComplete', TJSONBool.Create( bComplete ) );
           oD.AddPair( 'buttons', ButtonsOf( hw ) );
         end;
+        oRes.AddPair( 'mainThreadBusy', TJSONBool.Create( bBusy ) );
       except
         oRes.Free;
         raise;
@@ -1925,78 +2330,379 @@ begin
       Exit( oRes );
     end;
 
-    var sWant       := Trim( StringReplace( sButton, '&', '', [ rfReplaceAll ] ) );
-    for var hw in tops do
+    var aClickable: TArray<HWND> := [];
+    var aBlocked: TArray<HWND> := [];
+    if hNamed <> 0 then
     begin
-      var btns := TList<HWND>.Create;
-      try
-        EnumChildWindows( hw, @EnumChildProc, LPARAM( Pointer( btns ) ) );
-        for var hb in btns do
-        begin
-          if Pos( 'button', LowerCase( WndClass( hb ) ) ) = 0 then Continue;
-          // Only click a button the user could actually click (visible + enabled).
-          if ( not IsWindowVisible( hb ) ) or ( not IsWindowEnabled( hb ) ) then Continue;
-          if SameText( Trim( StringReplace( WndText( hb ), '&', '', [ rfReplaceAll ] ) ), sWant ) then
+      if WndCanBeClicked( hNamed ) then
+        aClickable  := [ hNamed ]
+      else
+        aBlocked    := [ hNamed ];
+    end
+    else
+    begin
+      //  Every match is looked at, not only the first: two clickable ones mean the caller has to say which, and an
+      //  unclickable one is worth naming in the refusal.
+      var sWant     := PlainButtonCaption( sButton );
+      for var hw in tops do
+        for var hb in ButtonWindowsOf( hw ) do
+          if SameText( PlainButtonCaption( WndText( hb ) ), sWant ) then
           begin
-            // Capture captions BEFORE the click — BM_CLICK may destroy the
-            // dialog (and its button) before we can read them back.
-            var sBtnText := WndText( hb );
-            var sDlgText := WndText( hw );
-
-            var dwRes: DWORD_PTR := 0;
-            SendMessageTimeout( hb, BM_CLICK, 0, 0, SMTO_ABORTIFHUNG, 5000, @dwRes );
-
-            //  A STYLED or otherwise custom-drawn control keeps a window class containing
-            //  'button' - so the search above finds it - but its window procedure does not
-            //  implement BM_CLICK, and the send SUCCEEDS while nothing happens. Ethea's
-            //  TStyledButton on a TStyledTaskDialog is exactly this. Fall back to the mouse
-            //  messages every TControl does handle.
-            if IsWindow( hb ) then
-            begin
-              var rc: TRect;
-              if GetClientRect( hb, rc ) then
-              begin
-                var lp: LPARAM := MakeLParam( ( rc.Right - rc.Left ) div 2,
-                  ( rc.Bottom - rc.Top ) div 2 );
-                SendMessageTimeout( hb, WM_LBUTTONDOWN, MK_LBUTTON, lp,
-                  SMTO_ABORTIFHUNG, 5000, @dwRes );
-                SendMessageTimeout( hb, WM_LBUTTONUP, 0, lp,
-                  SMTO_ABORTIFHUNG, 5000, @dwRes );
-              end;
-            end;
-
-            Result  := TJSONObject.Create;
-            TJSONObject( Result ).AddPair( 'clicked', sBtnText );
-            TJSONObject( Result ).AddPair( 'dialog', sDlgText );
-            //  Whether the click TOOK EFFECT, not merely whether a message was sent. A
-            //  caller that cannot tell those apart chases the wrong problem.
-            //
-            //  The button posts a ModalResult and the window is destroyed only once the
-            //  MODAL LOOP UNWINDS, which has not happened by the time the click returns -
-            //  so reading IsWindow immediately reports false for a click that worked.
-            //  Wait for it, briefly and with a bound: this runs off the VCL thread, so
-            //  sleeping here cannot stall the loop we are waiting on.
-            var iWaited := 0;
-            while IsWindow( hb ) and ( iWaited < DISMISS_WAIT_MS ) do
-            begin
-              Sleep( DISMISS_POLL_MS );
-              Inc( iWaited, DISMISS_POLL_MS );
-            end;
-
-            TJSONObject( Result ).AddPair( 'dismissed',
-              TJSONBool.Create( not IsWindow( hb ) ) );
-            Exit;
+            if WndCanBeClicked( hb ) then
+              aClickable := aClickable + [ hb ]
+            else if IsWindowVisible( hb ) then
+              aBlocked := aBlocked + [ hb ];
           end;
-        end;
-      finally
-        btns.Free;
-      end;
     end;
 
-    raise EAutoError.CreateCode( 'NoButton', Format( 'no open dialog has a button matching "%s"', [ sButton ] ) );
+    //  A message box disables only its OWNER, so another open window's button of the same caption is clickable too;
+    //  the one in the window that is waiting for an answer is the one meant.  Only when that does not settle it is the
+    //  caption refused.
+    if Length( aClickable ) > 1 then
+    begin
+      var aModal: TArray<HWND> := [];
+      for var hb in aClickable do
+        if WndIsModal( GetAncestor( hb, GA_ROOT ) ) then
+          aModal    := aModal + [ hb ];
+      if Length( aModal ) = 1 then
+        aClickable  := aModal;
+    end;
+
+    if Length( aClickable ) > 1 then
+    begin
+      var oData     := TJSONArray.Create;
+      for var hb in aClickable do
+        oData.AddElement( ButtonRef( hb ) );
+      raise EAutoError.CreateCodeData( 'AmbiguousButton', Format( '%d buttons "%s" could be clicked; name the one meant with ' +
+        '"buttonHwnd" (each one''s hwnd is in error.data), or its window with "hwnd"', [ Length( aClickable ), sButton ] ), oData );
+    end;
+
+    if Length( aClickable ) = 0 then
+    begin
+      if Length( aBlocked ) = 0 then
+        raise EAutoError.CreateCode( 'NoButton', Format( 'no open dialog has a button matching "%s"', [ sButton ] ) );
+      var oData     := TJSONArray.Create;
+      for var hb in aBlocked do
+        oData.AddElement( ButtonRef( hb ) );
+      raise EAutoError.CreateCodeData( 'NotClickable', Format( 'the button "%s" is hidden or disabled, or the window it sits in ' +
+        'is - a window goes disabled while something modal is on top of it; ask dialogs for the one that is waiting',
+        [ if hNamed <> 0 then WndText( hNamed ) else sButton ] ), oData );
+    end;
+
+    var hTarget     := aClickable[ 0 ];
+    var hDlg        := GetAncestor( hTarget, GA_ROOT );
+    // Captions BEFORE the click: it may destroy the dialog and its button.
+    var sBtnText    := WndText( hTarget );
+    var sDlgText    := WndText( hDlg );
+
+    var sMethod     := 'bmClick';
+    if WndTakesBmClick( hTarget ) then
+      PostMessage( hTarget, BM_CLICK, 0, 0 )
+    else
+    begin
+      //  A STYLED or otherwise custom-drawn control keeps a window class containing 'button' - so the search
+      //  finds it - but its window procedure does not implement BM_CLICK.  Ethea's TStyledButton on a
+      //  TStyledTaskDialog is exactly this.  The mouse messages every TControl handles click it instead.
+      sMethod       := 'mouse';
+      var rc: TRect;
+      GetClientRect( hTarget, rc );
+      var lp: LPARAM := MakeLParam( rc.Width div 2, rc.Height div 2 );
+      PostMessage( hTarget, WM_LBUTTONDOWN, MK_LBUTTON, lp );
+      PostMessage( hTarget, WM_LBUTTONUP, 0, lp );
+    end;
+
+    //  Judged from when the click was HANDLED, not when it was posted: a slow handler, or a busy main thread, would
+    //  otherwise read as "nothing came of it" while the click is still queued or running, and a caller that retried
+    //  would click twice.  Without the marker window (a server started off the main thread) it is judged as before.
+    var sOutcome: string;
+    if Assigned( GClickMark ) and not GClickMark.WaitForMainThread( iWait ) then
+      sOutcome      := 'pending'
+    else
+      sOutcome      := ClickOutcome( hDlg );
+
+    var oRes        := TJSONObject.Create;
+    oRes.AddPair( 'clicked', sBtnText );
+    oRes.AddPair( 'dialog', sDlgText );
+    oRes.AddPair( 'hwnd', TJSONNumber.Create( IntPtr( hDlg ) ) );
+    oRes.AddPair( 'buttonHwnd', TJSONNumber.Create( IntPtr( hTarget ) ) );
+    //  Whether the click TOOK EFFECT, not merely whether a message was sent: the window it was in went away.
+    oRes.AddPair( 'dismissed', TJSONBool.Create( sOutcome = 'gone' ) );
+    oRes.AddPair( 'outcome', sOutcome );
+    oRes.AddPair( 'method', sMethod );
+    Result          := oRes;
   finally
     tops.Free;
   end;
+
+end;
+
+{ ── click_at / drop_files (VCL — main thread) ──────────────────────────── }
+
+/// <summary>Reads the <c>shift</c> argument of <c>click_at</c>: <c>Shift</c>, <c>Ctrl</c> or <c>Shift+Ctrl</c>, empty for none.</summary>
+/// <param name="AText">The argument.</param>
+/// <returns>The <c>MK_SHIFT</c> / <c>MK_CONTROL</c> flags a mouse message carries.</returns>
+/// <exception cref="EAutoError"><c>BadRequest</c> for any other key.</exception>
+function ParseClickShift( const AText: string ): WPARAM;
+begin
+
+  Result            := 0;
+  for var sPart in AText.Split( [ '+' ] ) do
+  begin
+    var sKey        := Trim( sPart );
+    if sKey = '' then Continue;
+    if SameText( sKey, 'Shift' ) then
+      Result        := Result or MK_SHIFT
+    else if SameText( sKey, 'Ctrl' ) then
+      Result        := Result or MK_CONTROL
+    else
+      raise EAutoError.CreateCode( 'BadRequest', Format( '"shift" is Shift, Ctrl or Shift+Ctrl, not "%s"', [ AText ] ) );
+  end;
+
+end;
+
+/// <summary>Reads a required integer argument of a built-in command.</summary>
+/// <param name="AReq">The request.</param>
+/// <param name="AKey">The argument's name.</param>
+/// <param name="ACommand">The command, for the message.</param>
+/// <returns>The value.</returns>
+/// <exception cref="EAutoError"><c>BadRequest</c> when the argument is missing or not a number.</exception>
+function NeedIntArg( AReq: TJSONObject; const AKey, ACommand: string ): Integer;
+begin
+
+  if not ( AReq.GetValue( AKey ) is TJSONNumber ) then
+    raise EAutoError.CreateCode( 'BadRequest', Format( '%s needs "%s", a number', [ ACommand, AKey ] ) );
+  Result            := TJSONNumber( AReq.GetValue( AKey ) ).AsInt;
+
+end;
+
+/// <summary>
+///   Finds the window that input at a point of a control lands in: the control's own window, or for a control
+///   without one its parent's, and in it whatever child window lies on top there - as Windows itself would route a
+///   real click (GxInspect, <c>TryGetWindowAtPoint</c>).
+/// </summary>
+/// <param name="ACtl">The control.</param>
+/// <param name="AX">The point's horizontal position, in the control's client coordinates.</param>
+/// <param name="AY">The point's vertical position, in the control's client coordinates.</param>
+/// <param name="APoint">Receives the point in the returned window's client coordinates.</param>
+/// <returns>The window.</returns>
+/// <exception cref="EAutoError">
+///   <c>OutsideControl</c> for a point outside the client area; <c>NotClickable</c> when the control, or the window
+///   at the point or one it sits in, is hidden or disabled (a modal dialog in front disables it); <c>NoWindow</c> when
+///   the control has no window yet.
+/// </exception>
+function WindowAtControlPoint( ACtl: TControl; AX, AY: Integer; out APoint: TPoint ): HWND;
+begin
+
+  if ( AX < 0 ) or ( AY < 0 ) or ( AX >= ACtl.ClientWidth ) or ( AY >= ACtl.ClientHeight ) then
+    raise EAutoError.CreateCode( 'OutsideControl', Format( '%d,%d is outside %s, whose client area is %d x %d',
+      [ AX, AY, ACtl.Name, ACtl.ClientWidth, ACtl.ClientHeight ] ) );
+  if not ( ACtl.Visible and ACtl.Enabled ) then
+    raise EAutoError.CreateCode( 'NotClickable', ACtl.Name + ' is hidden or disabled, so a user could not reach it' );
+
+  // A control without a window of its own gets its mouse messages through its parent.
+  if ACtl is TWinControl then
+  begin
+    if not TWinControl( ACtl ).HandleAllocated then
+      raise EAutoError.CreateCode( 'NoWindow', ACtl.Name + ' has no window yet, so it is not on screen' );
+    Result          := TWinControl( ACtl ).Handle;
+    APoint          := Point( AX, AY );
+  end
+  else
+  begin
+    if ( ACtl.Parent = nil ) or not ACtl.Parent.HandleAllocated then
+      raise EAutoError.CreateCode( 'NoWindow', ACtl.Name + ' is in no window, so it is not on screen' );
+    Result          := ACtl.Parent.Handle;
+    APoint          := Point( ACtl.Left + AX, ACtl.Top + AY );
+  end;
+
+  repeat
+    var hChild      := ChildWindowFromPointEx( Result, APoint, CWP_SKIPINVISIBLE or CWP_SKIPTRANSPARENT );
+    if ( hChild = 0 ) or ( hChild = Result ) then Break;
+    MapWindowPoints( Result, hChild, APoint, 1 );
+    Result          := hChild;
+  until False;
+
+  if not WndCanBeClicked( Result ) then
+    raise EAutoError.CreateCode( 'NotClickable', 'The window at that point, or one it sits in, is hidden or disabled - ' +
+      'a modal dialog in front disables it; ask dialogs' );
+
+end;
+
+/// <summary>The control a point of a window reaches, for the reply: its name, or its class when unnamed, or the window class when it is no VCL window.</summary>
+/// <param name="AWnd">The window.</param>
+/// <param name="APoint">The point, in its client coordinates.</param>
+/// <returns>The description.</returns>
+function DescribeReached( AWnd: HWND; const APoint: TPoint ): string;
+begin
+
+  var oReached: TControl := FindControl( AWnd );
+  if oReached is TWinControl then
+  begin
+    var oOnTop      := TWinControl( oReached ).ControlAtPos( APoint, False );
+    if Assigned( oOnTop ) then
+      oReached      := oOnTop;
+  end;
+  if oReached = nil then
+    Result          := WndClass( AWnd )
+  else if oReached.Name <> '' then
+    Result          := oReached.Name
+  else
+    Result          := oReached.ClassName;
+
+end;
+
+/// <summary>
+///   <c>click_at</c> command: a real left click at a point of a control, in its client coordinates - the mouse
+///   messages a user's click produces, posted to whatever window lies at that point, so a control that reacts to
+///   WHERE it is clicked (a grid cell, a list item, a paint box) is driven as a user drives it.  For a click on the
+///   control as a whole, <c>click</c> is the simpler choice.
+/// </summary>
+/// <param name="AReq">The request object (<c>form?</c>, <c>name</c>, <c>x</c>, <c>y</c>, <c>shift?</c>).</param>
+/// <returns><c>{ clicked, x, y, shift, reaches }</c>; <c>reaches</c> names what is at the point, which need not be the control named.</returns>
+/// <exception cref="EAutoError">
+///   The addressing codes; <c>NotVisual</c> (not a control); <c>BadRequest</c> (no <c>x</c> / <c>y</c>, or an unknown
+///   key in <c>shift</c>); and <see cref="WindowAtControlPoint"/>'s codes.
+/// </exception>
+/// <remarks>
+///   Posted, so the reply goes out before the click is handled: a click that opens a modal dialog cannot hold it up.
+///   Shift and Ctrl travel in the messages' key flags, which is where the VCL's mouse events read them; code that
+///   asks <c>GetKeyState</c> instead does not see them.
+/// </remarks>
+function AutoCmdClickAt( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var oForm         := AutoResolveForm( AReq );
+  var oComp         := AutoResolveComp( AReq, oForm );
+  if oComp is not TControl then
+    raise EAutoError.CreateCode( 'NotVisual', Format( '%s (%s) is not a control, so it cannot be clicked at a point',
+      [ oComp.Name, oComp.ClassName ] ) );
+
+  var iX            := NeedIntArg( AReq, 'x', 'click_at' );
+  var iY            := NeedIntArg( AReq, 'y', 'click_at' );
+  var sShift        := AReq.GetValue<string>( 'shift', '' );
+  var iKeys         := ParseClickShift( sShift );
+
+  var ptAt: TPoint;
+  var hAt           := WindowAtControlPoint( TControl( oComp ), iX, iY, ptAt );
+  var lp: LPARAM    := MakeLParam( Word( ptAt.X ), Word( ptAt.Y ) );
+
+  PostMessage( hAt, WM_MOUSEMOVE, iKeys, lp );
+  PostMessage( hAt, WM_LBUTTONDOWN, iKeys or MK_LBUTTON, lp );
+  PostMessage( hAt, WM_LBUTTONUP, iKeys, lp );
+
+  var oRes          := TJSONObject.Create;
+  oRes.AddPair( 'clicked', oComp.Name );
+  oRes.AddPair( 'x', TJSONNumber.Create( iX ) );
+  oRes.AddPair( 'y', TJSONNumber.Create( iY ) );
+  oRes.AddPair( 'shift', sShift );
+  oRes.AddPair( 'reaches', DescribeReached( hAt, ptAt ) );
+  Result            := oRes;
+
+end;
+
+/// <summary>Builds the <c>CF_HDROP</c> block <c>WM_DROPFILES</c> carries: a <c>DROPFILES</c> header, then the names, each ended by #0, and one more #0.</summary>
+/// <param name="AFiles">The files.</param>
+/// <param name="APoint">The drop point, in the receiving window's client coordinates.</param>
+/// <returns>The block; whoever it is handed to frees it, with <c>DragFinish</c>.</returns>
+/// <exception cref="EOSError">When the memory cannot be allocated.</exception>
+function BuildDropHandle( const AFiles: TArray<string>; const APoint: TPoint ): HGLOBAL;
+begin
+
+  var iSize         := SizeOf( TDropFiles ) + SizeOf( Char );
+  for var sFile in AFiles do
+    Inc( iSize, ( Length( sFile ) + 1 ) * SizeOf( Char ) );
+
+  Result            := GlobalAlloc( GMEM_MOVEABLE or GMEM_ZEROINIT, iSize );
+  if Result = 0 then
+    RaiseLastOSError;
+
+  var pBlock        := GlobalLock( Result );
+  try
+    var pHeader     := PDropFiles( pBlock );
+    pHeader.pFiles  := SizeOf( TDropFiles );
+    pHeader.pt      := APoint;
+    pHeader.fNC     := False;
+    pHeader.fWide   := True;
+    var pDest       := PChar( PByte( pBlock ) + SizeOf( TDropFiles ) );
+    for var sFile in AFiles do
+    begin
+      if sFile <> '' then
+        Move( PChar( sFile )^, pDest^, Length( sFile ) * SizeOf( Char ) );
+      Inc( pDest, Length( sFile ) + 1 );
+    end;
+  finally
+    GlobalUnlock( Result );
+  end;
+
+end;
+
+/// <summary>
+///   <c>drop_files</c> command: drops files on a control as if dragged there from Explorer, through the
+///   <c>WM_DROPFILES</c> Windows hands to the nearest window up the chain that accepts files
+///   (<c>WS_EX_ACCEPTFILES</c>, set by <c>DragAcceptFiles</c>).
+/// </summary>
+/// <param name="AReq">The request object (<c>form?</c>, <c>name</c>, <c>files</c> - an array of paths, <c>x?</c>, <c>y?</c> - the drop point in the control's client coordinates, its centre by default).</param>
+/// <returns><c>{ dropped, target, x, y }</c>; <c>target</c> names the window that took the drop.</returns>
+/// <exception cref="EAutoError">
+///   The addressing codes; <c>NotVisual</c>; <c>BadRequest</c> for a missing or empty <c>files</c>; <c>NoFile</c> for a
+///   file or folder that does not exist (Explorer drops only those that do); <c>NoDropTarget</c> when no window up
+///   the chain accepts files; and <see cref="WindowAtControlPoint"/>'s codes.
+/// </exception>
+/// <remarks>
+///   Posted, so the reply goes out first; the receiver frees the block with <c>DragFinish</c>.  A control that takes
+///   files only through OLE drag and drop (<c>RegisterDragDrop</c>) is not reached this way.
+/// </remarks>
+function AutoCmdDropFiles( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var oForm         := AutoResolveForm( AReq );
+  var oComp         := AutoResolveComp( AReq, oForm );
+  if oComp is not TControl then
+    raise EAutoError.CreateCode( 'NotVisual', Format( '%s (%s) is not a control, so nothing can be dropped on it',
+      [ oComp.Name, oComp.ClassName ] ) );
+  var oCtl          := TControl( oComp );
+
+  var oFiles        := AReq.GetValue( 'files' );
+  if not ( oFiles is TJSONArray ) or ( TJSONArray( oFiles ).Count = 0 ) then
+    raise EAutoError.CreateCode( 'BadRequest', 'drop_files needs "files", an array of paths' );
+  var aFiles: TArray<string> := [];
+  for var oFile in TJSONArray( oFiles ) do
+  begin
+    if oFile is not TJSONString then
+      raise EAutoError.CreateCode( 'BadRequest', '"files" holds paths, as strings' );
+    var sFile       := TJSONString( oFile ).Value;
+    if not ( FileExists( sFile ) or DirectoryExists( sFile ) ) then
+      raise EAutoError.CreateCode( 'NoFile', sFile + ' does not exist, and Explorer drops only what does' );
+    aFiles          := aFiles + [ sFile ];
+  end;
+
+  var iX            := if AReq.GetValue( 'x' ) <> nil then NeedIntArg( AReq, 'x', 'drop_files' ) else oCtl.ClientWidth div 2;
+  var iY            := if AReq.GetValue( 'y' ) <> nil then NeedIntArg( AReq, 'y', 'drop_files' ) else oCtl.ClientHeight div 2;
+
+  var ptAt: TPoint;
+  var hTarget       := WindowAtControlPoint( oCtl, iX, iY, ptAt );
+  while ( GetWindowLong( hTarget, GWL_EXSTYLE ) and WS_EX_ACCEPTFILES ) = 0 do
+  begin
+    if ( GetWindowLong( hTarget, GWL_STYLE ) and WS_CHILD ) = 0 then
+      raise EAutoError.CreateCode( 'NoDropTarget', oCtl.Name + ' does not accept dropped files, nor does any window it sits in' );
+    var hParent     := GetParent( hTarget );
+    MapWindowPoints( hTarget, hParent, ptAt, 1 );
+    hTarget         := hParent;
+  end;
+
+  var hDrop         := BuildDropHandle( aFiles, ptAt );
+  if not PostMessage( hTarget, WM_DROPFILES, WPARAM( hDrop ), 0 ) then
+  begin
+    GlobalFree( hDrop );
+    RaiseLastOSError;
+  end;
+
+  var oRes          := TJSONObject.Create;
+  oRes.AddPair( 'dropped', TJSONNumber.Create( Length( aFiles ) ) );
+  oRes.AddPair( 'target', DescribeReached( hTarget, ptAt ) );
+  oRes.AddPair( 'x', TJSONNumber.Create( iX ) );
+  oRes.AddPair( 'y', TJSONNumber.Create( iY ) );
+  Result            := oRes;
 
 end;
 
@@ -2977,6 +3683,8 @@ type
     Area: string;
   end;
 
+function PlanRenderOf( ACtl: TControl; const AArea, ATarget: string ): TRenderPlan; forward;
+
 /// <summary>
 ///   Main-thread half of render mode: resolves the target and works out where it sits inside its
 ///   top-level window. Coordinates come from the host's main thread, so they are in the host's own
@@ -2994,7 +3702,24 @@ begin
   if oComp is not TControl then
     raise EAutoError.CreateCode( 'NotVisual', Format( '%s (%s) is not a control, so it has nothing to render', [ oComp.Name, oComp.ClassName ] ) );
 
-  var oCtl          := TControl( oComp );
+  Result            := PlanRenderOf( TControl( oComp ), if oComp = oForm then 'form' else 'control',
+    if oComp.Name <> '' then oComp.Name else AReq.GetValue<string>( 'name', oComp.ClassName ) );
+
+end;
+
+/// <summary>
+///   The main-thread half of rendering one control, however it was found: checks it is showing and works out where
+///   it sits inside its top-level window.  See <see cref="PlanRender"/>.
+/// </summary>
+/// <param name="ACtl">The control.</param>
+/// <param name="AArea"><c>form</c> or <c>control</c>, for the reply.</param>
+/// <param name="ATarget">What to call it in the reply.</param>
+/// <returns>The plan.</returns>
+/// <exception cref="EAutoError"><c>NotShowing</c> when it is hidden, or on a hidden parent.</exception>
+function PlanRenderOf( ACtl: TControl; const AArea, ATarget: string ): TRenderPlan;
+begin
+
+  var oCtl          := ACtl;
   var bShowing      := if oCtl is TWinControl then TWinControl( oCtl ).Showing
     else oCtl.Visible and ( oCtl.Parent <> nil ) and oCtl.Parent.Showing;
   if not bShowing then
@@ -3025,10 +3750,14 @@ begin
   // A control scrolled partly out of its window: keep the part the window can render.
   Result.Crop.Intersect( Rect( 0, 0, rcRoot.Width, rcRoot.Height ) );
 
-  Result.Area       := if oComp = oForm then 'form' else 'control';
-  Result.Target     := if oComp.Name <> '' then oComp.Name else AReq.GetValue<string>( 'name', oComp.ClassName );
+  Result.Area       := AArea;
+  Result.Target     := ATarget;
 
 end;
+
+
+function RenderPlanned( const APlanner: TFunc<TRenderPlan>; const AResolveAgain: TFunc<TControl>; AMaxWidth: Integer;
+  const APath: string ): TJSONObject; forward;
 
 /// <summary>
 ///   <c>screenshot</c> command, render mode: with a <c>"name"</c> (or a <c>"form"</c> and no
@@ -3054,14 +3783,43 @@ end;
 function AutoCmdRender( AReq: TJSONObject; const AAppName: string ): TJSONValue;
 begin
 
-  var iMaxWidth     := AReq.GetValue<Integer>( 'maxWidth', 0 );
-  var sPath         := Format( '%s\%s-%u.png', [ DesktopFolder, AAppName, GetTickCount64 ] );
+  Result            := RenderPlanned(
+    function: TRenderPlan
+    begin
+      Result        := PlanRender( AReq );
+    end,
+    function: TControl
+    begin
+      Result        := TControl( AutoResolveComp( AReq, AutoResolveForm( AReq ) ) );
+    end,
+    AReq.GetValue<Integer>( 'maxWidth', 0 ), Format( '%s\%s-%u.png', [ DesktopFolder, AAppName, GetTickCount64 ] ) );
+
+end;
+
+/// <summary>
+///   Renders a planned target to a PNG: <c>PrintWindow</c> of its top-level window on THIS (worker) thread, cropped to
+///   the target, with the VCL's <c>PaintTo</c> on the main thread as the fallback.  Shared by <c>screenshot</c>'s
+///   render mode and <see cref="TAutomationServer.RenderControl"/>; why the render must run off the main thread is in
+///   <see cref="AutoCmdRender"/>.
+/// </summary>
+/// <param name="APlanner">Called on the main thread to plan the render.</param>
+/// <param name="AResolveAgain">Called on the main thread, for the fallback only, to find the control afresh.</param>
+/// <param name="AMaxWidth">Scale down to at most this width; 0 for none.</param>
+/// <param name="APath">The PNG to write.</param>
+/// <returns><c>{ path, width, height, area, target, renderer, sourceWidth?, sourceHeight? }</c>.</returns>
+/// <exception cref="EAutoError"><c>NotShowing</c> when the target lies outside its window; whatever the planner raises.</exception>
+function RenderPlanned( const APlanner: TFunc<TRenderPlan>; const AResolveAgain: TFunc<TControl>; AMaxWidth: Integer;
+  const APath: string ): TJSONObject;
+begin
+
+  var iMaxWidth     := AMaxWidth;
+  var sPath         := APath;
 
   var rPlan: TRenderPlan;
   TThread.Synchronize( nil,
     procedure
     begin
-      rPlan         := PlanRender( AReq );
+      rPlan         := APlanner();
     end );
 
   if rPlan.Crop.IsEmpty then
@@ -3101,8 +3859,7 @@ begin
         TThread.Synchronize( nil,
           procedure
           begin
-            var oForm := AutoResolveForm( AReq );
-            var oComp := AutoResolveComp( AReq, oForm );
+            var oComp := AResolveAgain();
             if oComp is TWinControl then
               TWinControl( oComp ).PaintTo( oShot.Canvas.Handle, 0, 0 )
             else
@@ -3306,6 +4063,18 @@ begin
       Result.AddPair( 'ok', TJSONBool.Create( True ) );
       Result.AddPair( 'result', oOut );
     end
+    else if SameText( sCmd, 'click_at' ) then
+    begin
+      var oOut      := AutoCmdClickAt( AReq );
+      Result.AddPair( 'ok', TJSONBool.Create( True ) );
+      Result.AddPair( 'result', oOut );
+    end
+    else if SameText( sCmd, 'drop_files' ) then
+    begin
+      var oOut      := AutoCmdDropFiles( AReq );
+      Result.AddPair( 'ok', TJSONBool.Create( True ) );
+      Result.AddPair( 'result', oOut );
+    end
     else if SameText( sCmd, 'action' ) then
     begin
       var oOut      := AutoCmdAction( AReq );
@@ -3406,6 +4175,9 @@ begin
   if Assigned( GImpl ) then Exit;
 
   GDisableIdleTimers := ADisableIdleTimers;
+  //  The click marker must belong to the main thread, whose queue it marks; off it, dialogs judges clicks as before 0.13.
+  if ( GClickMark = nil ) and ( TThread.CurrentThread.ThreadID = MainThreadID ) then
+    GClickMark      := TClickMarkWindow.Create;
   GImpl             := TServerImpl.Create( AAppName );
 
 end;
@@ -3424,10 +4196,27 @@ begin
 
 end;
 
+class function TAutomationServer.RenderControl( const AResolve: TFunc<TControl>; AMaxWidth: Integer;
+  const AFileStem: string ): TJSONObject;
+begin
+
+  Result            := RenderPlanned(
+    function: TRenderPlan
+    begin
+      var oCtl      := AResolve();
+      Result        := PlanRenderOf( oCtl, if oCtl is TCustomForm then 'form' else 'control',
+        if oCtl.Name <> '' then oCtl.Name else oCtl.ClassName );
+    end,
+    AResolve, AMaxWidth, Format( '%s\%s-%u.png', [ DesktopFolder, AFileStem, GetTickCount64 ] ) );
+
+end;
+
 class procedure TAutomationServer.Stop;
 begin
 
+  //  The server first: freeing it waits for every connection, so no dialogs command is still waiting on the marker.
   FreeAndNil( GImpl );
+  FreeAndNil( GClickMark );
 
 end;
 
@@ -3460,7 +4249,12 @@ begin
 
   System.TMonitor.Enter( GCommands );
   try
-    GCommands.AddOrSetValue( LowerCase( Trim( AName ) ), rCommand );
+    //  Refused, not replaced: with AddOrSetValue a second package silently took the name over, and the first package's
+    //  UnregisterCommand then removed the second's command.
+    if GCommands.ContainsKey( LowerCase( Trim( AName ) ) ) then
+      raise EArgumentException.CreateFmt( 'RegisterCommand( %s ): that name is registered already; ' +
+        'UnregisterCommand it first', [ AName ] );
+    GCommands.Add( LowerCase( Trim( AName ) ), rCommand );
   finally
     System.TMonitor.Exit( GCommands );
   end;
@@ -3486,6 +4280,7 @@ initialization
 
 finalization
   FreeAndNil( GImpl );
+  FreeAndNil( GClickMark );
   FreeAndNil( GCommands );
   GKeysRunning      := nil;
   FreeAndNil( GKeyWindow );

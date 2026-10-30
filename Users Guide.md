@@ -49,6 +49,8 @@ Read what is on screen, then act on it:
 | See the forms and their components | `tree` (`app_tree`); `deep:true` adds frame and docked controls |
 | Read or write a property | `get` / `set` — `Caption`, `Font.Size`, `Lines` |
 | Click a button | `click` — `mode:"message"` if the click opens a modal |
+| Click at a place in a control (a grid cell, a list row) | `click_at` — `x`, `y` in the control's client coordinates, `shift:"Ctrl"` |
+| Drop files on a control | `drop_files` — `files:["D:\\Data\\a.csv"]`, as Explorer does |
 | Run a menu or toolbar command | `action` |
 | Type, or press a shortcut | `keys` — `text:"ACME"`, `keys:"Ctrl+S Tab"` |
 | Answer a modal dialog | `dialogs` — `button:"OK"` |
@@ -75,6 +77,13 @@ test what a user would trigger, type and leave the field:
 A `click` in the default mode waits for its handler, so a handler that opens a modal blocks the
 call. Use `mode:"message"`, then answer the dialog with `dialogs`. `keys` stops on its own when a
 keystroke opens a modal (`stoppedReason:"modal"`) and sends nothing behind it.
+
+`dialogs` with no `button` lists the windows; `modalOnly:true` keeps only those waiting for an
+answer. A caption two windows share is refused as `AmbiguousButton`: pass the window's `hwnd` from
+the list. Read `outcome` in the reply: `gone` means the dialog closed, `covered` that the click
+raised another modal (list again), `unchanged` that it is still up - nothing came of the click, or
+the button does not close its window (Apply, Browse). An empty list with `mainThreadBusy:true`
+means a dialog may still be on its way: ask again.
 
 ## 4. Add a command of your own
 

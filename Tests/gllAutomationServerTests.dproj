@@ -66,6 +66,8 @@
             <MainSource>MainSource</MainSource>
         </DelphiCompile>
         <DCCReference Include="TestGllAutomationServer.pas"/>
+        <DCCReference Include="..\gllIdeAutomation\src\gllIdeAutomation.Rules.pas"/>
+        <DCCReference Include="TestGllIdeAutomationRules.pas"/>
         <BuildConfiguration Include="Base">
             <Key>Base</Key>
         </BuildConfiguration>

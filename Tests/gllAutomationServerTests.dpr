@@ -41,7 +41,9 @@ uses
   DUnitX.Loggers.Console,
   DUnitX.Loggers.Xml.NUnit,
   DUnitX.TestFramework,
-  TestGllAutomationServer in 'TestGllAutomationServer.pas';
+  TestGllAutomationServer in 'TestGllAutomationServer.pas',
+  gllIdeAutomation.Rules in '..\gllIdeAutomation\src\gllIdeAutomation.Rules.pas',
+  TestGllIdeAutomationRules in 'TestGllIdeAutomationRules.pas';
 
 // The project resource carries the embedded VCL style; without it the runner stops with exit code 251.
 {$R *.res}
