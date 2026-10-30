@@ -72,6 +72,29 @@ type
     /// <summary>Proves <c>SetProp</c> reports an unchanged value as unchanged, so a test can tell an OnChange cannot have fired.</summary>
     [Test]
     procedure SetProp_ReportsWhetherTheValueChanged;
+    /// <summary>
+    ///   Proves <c>SetProp</c> reports a write as a change when the server could not read the old value ( it then
+    ///   sends no <c>changed</c> ), even when the value written equals the old one: False must keep its single
+    ///   meaning, "it already held that value".
+    /// </summary>
+    [Test]
+    procedure SetProp_OldValueUnreadable_CountsAsChanged;
+    /// <summary>Proves <c>WaitForProp</c> raises at once on an error that waiting cannot clear ( <c>NoProp</c> ) instead of waiting out its time.</summary>
+    [Test]
+    procedure WaitForProp_PermanentError_RaisesAtOnce;
+    /// <summary>
+    ///   Proves <c>IsPidAlive</c> counts a process it may not open as alive ( the System process, PID 4 ): a caller
+    ///   deletes the advertisements of what it reports dead.
+    /// </summary>
+    [Test]
+    procedure IsPidAlive_AccessDenied_CountsAsAlive;
+    /// <summary>
+    ///   Proves the port-ownership decision ( <c>ListenersTrust</c>, on synthetic listener rows ) stops trusting the
+    ///   app's port once another process listens where a connection to 127.0.0.1 could reach it - on 127.0.0.1 or
+    ///   on the wildcard address - and ignores a listener on another address; and that the live launched app passes.
+    /// </summary>
+    [Test]
+    procedure PidOwnsLocalPort_SecondListener_IsUntrusted;
     /// <summary>Proves a server error arrives as <c>EAutomationCommandError</c> carrying the server's own code, here <c>NoComp</c>.</summary>
     [Test]
     procedure CommandError_CarriesTheServerCode;
@@ -139,7 +162,7 @@ function RunClientTargetIfAsked: Boolean;
 implementation
 
 uses
-  Winapi.Windows, System.SysUtils, System.Classes, System.IOUtils, System.JSON,
+  Winapi.Windows, System.SysUtils, System.Classes, System.Diagnostics, System.IOUtils, System.JSON,
   Vcl.Forms, Vcl.StdCtrls, Vcl.Dialogs,
   GllDUnitX.Station,
   gllAutomationServer;
@@ -154,6 +177,14 @@ type
   /// <summary>The target app's form, built in code so the suite needs no .dfm.</summary>
   TClientTargetForm = class( TForm )
   private
+    /// <summary>Backs <c>Flaky</c>.</summary>
+    FFlaky: string;
+    /// <summary>Backs <c>FlakyArmed</c>.</summary>
+    FFlakyArmed: Boolean;
+    /// <summary>Reads <c>Flaky</c>, raising once after <c>FlakyArmed</c> was set, as a getter that cannot always answer would.</summary>
+    /// <returns>The value.</returns>
+    /// <exception cref="EInvalidOpException">On the first read after arming.</exception>
+    function GetFlaky: string;
     /// <summary>Writes "Hello " and the edit's text to the label.</summary>
     /// <param name="Sender">The button.</param>
     procedure GoClick( Sender: TObject );
@@ -168,7 +199,24 @@ type
     /// <summary>Builds the controls.</summary>
     /// <param name="AOwner">The owner.</param>
     constructor Create( AOwner: TComponent ); override;
+  published
+    /// <summary>A property whose old value the server cannot always read, so <c>set</c> can report no <c>changed</c>.</summary>
+    property Flaky: string read GetFlaky write FFlaky;
+    /// <summary>Set True to make the next read of <c>Flaky</c> raise.</summary>
+    property FlakyArmed: Boolean read FFlakyArmed write FFlakyArmed;
   end;
+
+function TClientTargetForm.GetFlaky: string;
+begin
+
+  if FFlakyArmed then
+  begin
+    FFlakyArmed     := False;
+    raise EInvalidOpException.Create( 'Flaky cannot be read just now' );
+  end;
+  Result            := FFlaky;
+
+end;
 
 constructor TClientTargetForm.Create( AOwner: TComponent );
 
@@ -529,6 +577,84 @@ begin
   finally
     oCopy.Free;
   end;
+
+end;
+
+procedure TTestGllAutomationClient.SetProp_OldValueUnreadable_CountsAsChanged;
+begin
+
+  FApp.SetProp( TARGET_FORM, '', 'Flaky', 'same' );
+  FApp.SetProp( TARGET_FORM, '', 'FlakyArmed', 'true' );
+  //  the same value again, but the old one cannot be read: unknown, so not "already held it"
+  Assert.IsTrue( FApp.SetProp( TARGET_FORM, '', 'Flaky', 'same' ), 'an unreadable old value was reported unchanged' );
+  Assert.AreEqual( 'same', FApp.GetProp( TARGET_FORM, '', 'Flaky' ) );
+
+end;
+
+procedure TTestGllAutomationClient.WaitForProp_PermanentError_RaisesAtOnce;
+begin
+
+  var rWatch        := TStopwatch.StartNew;
+  var sCode         := '';
+  try
+    FApp.WaitForProp( TARGET_FORM, 'lblOut', 'NoSuchProperty', 'x', 8000 );
+  except
+    on E: EAutomationCommandError do
+      sCode         := E.Code;
+  end;
+  Assert.AreEqual( 'NoProp', sCode );
+  Assert.IsTrue( rWatch.ElapsedMilliseconds < 4000, Format( 'it waited %d ms for an error that cannot clear', [ rWatch.ElapsedMilliseconds ] ) );
+
+end;
+
+procedure TTestGllAutomationClient.IsPidAlive_AccessDenied_CountsAsAlive;
+begin
+
+  //  PID 4 is the System process, which exists while Windows runs. The test proves its claim only if this process
+  //  may not open it ( unelevated, no SeDebugPrivilege ): otherwise IsPidAlive takes its other path, so say so
+  var hSystem       := OpenProcess( SYNCHRONIZE, False, 4 );
+  if hSystem <> 0 then
+  begin
+    CloseHandle( hSystem );
+    Assert.Fail( 'precondition: this process may open PID 4 ( elevated? ), so the access-denied path cannot be tested here' );
+  end;
+  Assert.IsTrue( TAutomationDiscovery.IsPidAlive( 4 ), 'a process that may not be opened was reported dead' );
+
+end;
+
+/// <summary>A listener row for <c>ListenersTrust</c>.</summary>
+/// <param name="APid">Its owner.</param>
+/// <param name="AAddr">Its local address, little-endian.</param>
+/// <returns>The row.</returns>
+function Listener( APid, AAddr: Cardinal ): TAutomationListener;
+begin
+
+  Result.Pid        := APid;
+  Result.Addr       := AAddr;
+
+end;
+
+procedure TTestGllAutomationClient.PidOwnsLocalPort_SecondListener_IsUntrusted;
+const
+  APP_PID           = 1000;
+  OTHER_PID         = 2000;
+  OTHER_LOOPBACK    = $0200007F; // 127.0.0.2, which a connection to 127.0.0.1 cannot reach
+begin
+
+  //  the live table first: the launched app owns its port, and nothing else listens there
+  Assert.IsTrue( TAutomationDiscovery.PidOwnsLocalPort( FApp.Endpoint.Pid, FApp.Endpoint.Port ), 'the app does not own its port' );
+
+  //  then the decision itself, on synthetic rows: an outside test cannot make a second listener share the port
+  //  ( Windows refuses 127.0.0.1 with WSAEACCES, and 0.0.0.0 raises a firewall alert on the user's desktop )
+  Assert.IsTrue( TAutomationDiscovery.ListenersTrust( [ Listener( APP_PID, AUTOMATION_LOOPBACK_ADDR ) ], APP_PID ), 'the app alone' );
+  Assert.IsFalse( TAutomationDiscovery.ListenersTrust( [ Listener( APP_PID, AUTOMATION_LOOPBACK_ADDR ),
+    Listener( OTHER_PID, 0 ) ], APP_PID ), 'another process on the wildcard address was ignored' );
+  Assert.IsFalse( TAutomationDiscovery.ListenersTrust( [ Listener( OTHER_PID, AUTOMATION_LOOPBACK_ADDR ),
+    Listener( APP_PID, AUTOMATION_LOOPBACK_ADDR ) ], APP_PID ), 'another process on 127.0.0.1, listed first, was ignored' );
+  Assert.IsTrue( TAutomationDiscovery.ListenersTrust( [ Listener( APP_PID, AUTOMATION_LOOPBACK_ADDR ),
+    Listener( OTHER_PID, OTHER_LOOPBACK ) ], APP_PID ), 'a listener no connection to 127.0.0.1 can reach made the port untrusted' );
+  Assert.IsFalse( TAutomationDiscovery.ListenersTrust( [ Listener( APP_PID, 0 ) ], APP_PID ), 'the app on the wildcard address only' );
+  Assert.IsFalse( TAutomationDiscovery.ListenersTrust( [], APP_PID ), 'no listener at all' );
 
 end;
 

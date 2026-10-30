@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [In-Service]
 
 ### Added
+- (2026-10-31) **Four client tests for review fixes no test could see** - `TestGllAutomationClient.pas`.  `SetProp_OldValueUnreadable_CountsAsChanged` (the target form gains a `Flaky` property whose getter can raise once), `WaitForProp_PermanentError_RaisesAtOnce`, `IsPidAlive_AccessDenied_CountsAsAlive` (PID 4) and `PidOwnsLocalPort_SecondListener_IsUntrusted` (synthetic listener rows through the new `ListenersTrust`: Windows refuses a second 127.0.0.1 listener with WSAEACCES, and a 0.0.0.0 one raises a firewall alert on the user's desktop).  `IsPidAlive_AccessDenied_CountsAsAlive` fails as unproven, not passes, when this process may open PID 4 (elevated).  All six fixes from the 2026-10-31 review that the suite had never been shown to guard were then mutated at once (drive-relative screenshot path, `Attach` by a shared name, those four) and run through `test_run` on the hidden desktop: exactly those six tests failed, each on its own assertion; restored, 89 of 89 pass.  An independent review of the tests then found four points, all fixed: the firewall alert, the PID 4 precondition, a summary that overstated, and `WSAGetLastError` read inside the assertion that made the call.
 
 - (2026-10-30) **`BriefCallHeader_KeepsTheRoutineNameOnly`** - `TestGllIdeAutomationRules.pas`.  Real header shapes from the live IDE run; mutation-proved (keeping the opening parenthesis is KILLED).  67 tests.
 

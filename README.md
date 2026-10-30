@@ -37,7 +37,26 @@ Administrators and SYSTEM can read.
 ## Requirements
 
 - **Delphi 13 Florence** (RAD Studio 37.0), VCL, **Win32 and Win64**.
-- Packages that ship with Delphi: `rtl`, `vcl`, `vclimg`, `dbrtl`, `IndySystem`, `IndyCore`.
+- Packages that ship with Delphi: `rtl`, `vcl`, `vclimg`, `dbrtl`; and Indy's `IndySystem`, `IndyCore` (bundled with Delphi, or gllIndy10 - see below).
+- **Indy:** developed and tested with Indy 10 from GitHub ([IndySockets/Indy](https://github.com/IndySockets/Indy),
+  through our fork gllIndy10), but it should work fine with the Indy that ships with Delphi: it uses only Indy
+  10's basics (`TIdTCPServer`, `TIdTCPClient`, `ReadLn` / `WriteLn` with a line-length limit, `ReadLnTimedout`,
+  `IndyTextEncoding_UTF8`), all present in Delphi 13's bundled Indy 10.6.3.
+
+  **The GitHub Indy 10 is preferred**, for three reasons:
+  1. **It fixes a hang this server reaches.** `TIdTCPServer` could wait for ever when it shut down: a finished
+     connection thread was left in the scheduler's active list (`TIdSchedulerOfThread.TerminateYarn`). We found
+     and fixed it, and the fix was merged upstream on 2026-09-30 as Indy issue #699 / PR #700, after Delphi 13
+     shipped, so the bundled copy does not have it. This server shuts its listener down every time an app
+     closes, so with the bundled Indy an app driven with `/AUTOMATION` can occasionally hang on exit; a GUI
+     suite that launches and closes apps many times a run would see that as sporadic time-outs.
+  2. **It is newer.** gllIndy10 is level with upstream `10.6.3.15`, well ahead of Delphi 13's snapshot, and carries
+     the upstream fixes made since it, reviewed and taken one by one.
+  3. **It is what this was tested with**, and its fixes have regression tests of their own (gllIndy10's
+     `Tests\gllIndyTests`).
+
+  So use the bundled Indy if you must, and expect the occasional shutdown hang until a Delphi update ships an
+  Indy with the fix.
 
 ## Building
 

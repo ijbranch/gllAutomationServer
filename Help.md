@@ -70,7 +70,7 @@ App-specific awareness when driving:
 
 ## Transport, discovery & auth
 
-- **Transport:** loopback TCP (`127.0.0.1`, port auto-scanned from `8730`), newline-delimited JSON — one JSON object per line, request and response (Indy `TIdTCPServer`).
+- **Transport:** loopback TCP (`127.0.0.1`, port auto-scanned from `8730`), newline-delimited JSON — one JSON object per line, request and response (Indy `TIdTCPServer`).  Developed and tested with Indy 10 from GitHub (our fork gllIndy10), which is preferred; the Indy that ships with Delphi should work fine too, since it has every Indy call used here, but it lacks the fix for a hang when `TIdTCPServer` shuts down (Indy #699 / PR #700, merged after Delphi 13 shipped), so an app could occasionally hang on exit.  The reasons are in `README.md` § Requirements.
 - **Discovery:** each running instance writes `C:\ProgramData\GITLAK\Automation\<pid>.json` = `{ app, pid, port, token, started }`, a **fixed, account-independent** directory. Deleted on clean shutdown; stale files of dead processes are swept on start. When the server creates the directory it gives it a **protected DACL** (SYSTEM, Administrators and the current user only), because the file holds the session token.
 - **Auth:** a per-session GUID **token**. Every request must carry it; bad/missing token → `Unauthorised`.
 - **Every request gets a reply**, carrying the request's `id`, the pre-dispatch failures (`Unauthorised`, `BadRequest`, `RequestTooLong`) included. A wrongly typed envelope field is treated as absent (`"id":"abc"` gives `id` 0), and an exception anywhere in the marshalled body comes back as `Internal`, never as a closed connection.

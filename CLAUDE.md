@@ -33,6 +33,11 @@ a registered command (`RegisterCommand` + `ResolveForm` / `ResolveComponent`), n
 
 ## Build and test
 
+- **Indy is gllIndy10** (Indy 10 from GitHub) on this machine: it replaced the IDE's bundled Indy on
+  2026-09-30, and is preferred: it has the `TIdTCPServer` shutdown-hang fix (Indy #699 / PR #700) that the
+  bundled copy lacks, and this server reaches that code whenever an app closes. The code should also work
+  with the bundled Indy (it uses only Indy 10's basics; see `README.md` § Requirements), so keep it that
+  way: no Indy API newer than Delphi 13's bundled 10.6.3.
 - Package: all four modes (Win32 + Win64 × Debug + Release), Release last. Zero hints, zero warnings.
 - Tests: `Tests\gllAutomationServerTests.dproj` (DUnitX console, Win64 Debug). It links the package's DCUs
   from `..\37.0\<Platform>\<Config>`, so **rebuild the package first** or the run tests the old binary.

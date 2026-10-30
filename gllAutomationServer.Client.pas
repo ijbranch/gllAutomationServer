@@ -56,6 +56,8 @@ const
   AUTOMATION_LAUNCH_TIMEOUT_MS = 15000;
   /// <summary>How long <c>TAutomationApp.Close</c> waits for the app to exit before it terminates it, in milliseconds.</summary>
   AUTOMATION_CLOSE_TIMEOUT_MS = 10000;
+  /// <summary>127.0.0.1 as a little-endian <c>in_addr</c>, the form the TCP table reports a local address in.</summary>
+  AUTOMATION_LOOPBACK_ADDR = $0100007F;
 
 type
   /// <summary>One running app's advertisement, as read from its discovery file.</summary>
@@ -68,6 +70,14 @@ type
     Port: Word;
     /// <summary>The token every request must carry.</summary>
     Token: string;
+  end;
+
+  /// <summary>One socket listening on the port being checked, as the TCP table reports it.</summary>
+  TAutomationListener = record
+    /// <summary>The process that owns it.</summary>
+    Pid: Cardinal;
+    /// <summary>Its local IPv4 address as a little-endian <c>in_addr</c>: <c>AUTOMATION_LOOPBACK_ADDR</c>, 0 for the wildcard, or another.</summary>
+    Addr: Cardinal;
   end;
 
   /// <summary>Decides whether a live, port-owning advertisement may be sent the token.</summary>
@@ -114,6 +124,15 @@ type
     /// <param name="APort">The advertised port.</param>
     /// <returns>True when the process owns the port.</returns>
     class function PidOwnsLocalPort( APid: Cardinal; APort: Word ): Boolean; static;
+    /// <summary>
+    ///   <c>PidOwnsLocalPort</c>'s decision, given the sockets listening on the port: True when <c>APid</c> listens on
+    ///   127.0.0.1 and no other listener could take a connection to it ( another on 127.0.0.1, or one on the wildcard
+    ///   address, the app's own included ).  A listener on another address cannot, and is ignored.
+    /// </summary>
+    /// <param name="AListeners">The listening sockets on the port.</param>
+    /// <param name="APid">The advertised process.</param>
+    /// <returns>True when the port may be trusted.</returns>
+    class function ListenersTrust( const AListeners: TArray<TAutomationListener>; APid: Cardinal ): Boolean; static;
     /// <summary>True when the process runs as the same user as this one; one that cannot be read is not.</summary>
     /// <param name="APid">The process ID.</param>
     /// <returns>True when the token user SIDs match.</returns>
@@ -330,8 +349,6 @@ const
   MIB_TCP_STATE_LISTEN      = 2;
   /// <summary><c>OpenProcess</c> access enough to read the exit code, image name and token of another user's process; Winapi.Windows does not declare it.</summary>
   PROCESS_QUERY_LIMITED_INFORMATION = $1000;
-  /// <summary>127.0.0.1 as a little-endian <c>in_addr</c>.</summary>
-  LOOPBACK_ADDR             = $0100007F;
   /// <summary>The longest reply line accepted, so a misbehaving peer cannot make the read buffer grow without bound.</summary>
   MAX_REPLY_BYTES           = 4 * 1024 * 1024;
   /// <summary>How long a connection attempt may take, in milliseconds.</summary>
@@ -500,25 +517,37 @@ begin
       Exit; // retries exhausted: treat as untrusted
   until False;
 
+  var aListeners: TArray<TAutomationListener> := [];
   try
-    var bOwned      := False;
     for var iRow := 0 to Integer( pTable^.dwNumEntries ) - 1 do
     begin
       var pRow      := PMibTcpRowOwnerPid( NativeUInt( @pTable^.table[ 0 ] ) + NativeUInt( iRow ) * SizeOf( TMibTcpRowOwnerPid ) );
       var iPort     := ( ( pRow^.dwLocalPort and $FF ) shl 8 ) or ( ( pRow^.dwLocalPort shr 8 ) and $FF );
       if ( iPort <> APort ) or ( pRow^.dwState <> MIB_TCP_STATE_LISTEN ) then
         Continue;
-      //  the server binds 127.0.0.1 exactly; any OTHER listener on that port ( a wildcard one included )
-      //  could be the one a connection reaches, so its presence makes the port untrusted
-      if ( pRow^.dwOwningPid = APid ) and ( pRow^.dwLocalAddr = LOOPBACK_ADDR ) then
-        bOwned      := True
-      else if ( pRow^.dwLocalAddr = LOOPBACK_ADDR ) or ( pRow^.dwLocalAddr = 0 ) then
-        Exit( False );
+      var rListener: TAutomationListener;
+      rListener.Pid := pRow^.dwOwningPid;
+      rListener.Addr := pRow^.dwLocalAddr;
+      aListeners    := aListeners + [ rListener ];
     end;
-    Result          := bOwned;
   finally
     FreeMem( pTable );
   end;
+  Result            := ListenersTrust( aListeners, APid );
+
+end;
+
+class function TAutomationDiscovery.ListenersTrust( const AListeners: TArray<TAutomationListener>; APid: Cardinal ): Boolean;
+begin
+
+  Result            := False;
+  for var rListener in AListeners do
+    //  the server binds 127.0.0.1 exactly; any OTHER listener a connection to 127.0.0.1 could reach ( on
+    //  loopback, or on the wildcard address ) makes the port untrusted. One on another address cannot be reached.
+    if ( rListener.Pid = APid ) and ( rListener.Addr = AUTOMATION_LOOPBACK_ADDR ) then
+      Result        := True
+    else if ( rListener.Addr = AUTOMATION_LOOPBACK_ADDR ) or ( rListener.Addr = 0 ) then
+      Exit( False );
 
 end;
 
