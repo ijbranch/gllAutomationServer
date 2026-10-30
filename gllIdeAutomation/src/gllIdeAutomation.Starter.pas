@@ -60,7 +60,7 @@ interface
 implementation
 
 uses
-  System.SysUtils,
+  Winapi.Windows, System.SysUtils, System.IOUtils,
   gllAutomationServer, gllIdeAutomation.IdeCommands;
 
 const
@@ -76,6 +76,27 @@ begin
   Result := Trim( GetEnvironmentVariable( ENV_GATE ) ) = '1';
 end;
 
+///<summary>
+/// Appends one line to %LOCALAPPDATA%\GITLAK\gllIdeAutomation-startup.log: the package's start-up and shut-down
+/// run inside the IDE with every exception swallowed, so this file is the only record of what they did.  Never
+/// raises. </summary>
+/// <param name="AText">What happened.</param>
+procedure StartupLog( const AText: string );
+begin
+  try
+    var sBase := GetEnvironmentVariable( 'LOCALAPPDATA' );
+    if sBase = '' then Exit;   // never fall back to a folder on the IDE's current drive
+    var sDir := IncludeTrailingPathDelimiter( sBase ) + 'GITLAK';
+    ForceDirectories( sDir );
+    //  One append that creates the file when missing: no exists-then-Rewrite race between two IDEs starting together.
+    //  A line lost to a sharing clash with the other IDE is acceptable; an exception reaching the IDE is not.
+    TFile.AppendAllText( sDir + '\gllIdeAutomation-startup.log', Format( '%s pid %d: %s', [
+      FormatDateTime( 'yyyy-mm-dd hh:nn:ss.zzz', Now ), GetCurrentProcessId, AText ] ) + sLineBreak, TEncoding.UTF8 );
+  except
+    // logging must never cost the IDE anything
+  end;
+end;
+
 initialization
   // Every failure mode here is swallowed deliberately. This package is loaded during IDE
   // startup, before any user work exists to be saved, and an exception escaping a design-time
@@ -85,21 +106,38 @@ initialization
   try
     if ( AutomationRequested ) then
     begin
+      StartupLog( 'initialization: gate set, starting the server' );
       // False: leave the IDE's own timers alone - an application can log itself out mid-test and
       // needs them disabled; the IDE's belong to its plug-ins and are not ours to stop.
       TAutomationServer.Start( APP_NAME, False );
+      StartupLog( 'initialization: server started, registering the IDE commands' );
       RegisterIdeCommands;
+      StartupLog( 'initialization: IDE commands registered' );
     end;
   except
-    // Intentionally silent - see above.
+    // Not shown to the user (see above), but not lost either: a failure here left a server that answered ping with
+    // NO ide_* command registered and nothing anywhere saying why (2026-10-30).  A bare except, so that nothing at
+    // all escapes - not even an object that is no Exception.
+    var sWhat := if ExceptObject is Exception then
+      Exception( ExceptObject ).ClassName + ': ' + Exception( ExceptObject ).Message else 'a non-Exception object';
+    StartupLog( 'initialization FAILED, IDE commands not registered: ' + sWhat );
+    OutputDebugString( PChar( 'gllIdeAutomation: start-up failed, IDE commands not registered: ' + sWhat ) );
   end;
 
 finalization
   try
+    //  Only when the gate started something: an IDE closed without automation writes nothing.
+    if ( AutomationRequested ) then
+      StartupLog( 'finalization: stopping the server and unregistering the IDE commands' );
     TAutomationServer.Stop;
     UnregisterIdeCommands;
+    if ( AutomationRequested ) then
+      StartupLog( 'finalization: done' );
   except
     // Likewise: a failure while the IDE is closing must not turn into a shutdown hang.
+    var sWhat := if ExceptObject is Exception then
+      Exception( ExceptObject ).ClassName + ': ' + Exception( ExceptObject ).Message else 'a non-Exception object';
+    StartupLog( 'finalization FAILED: ' + sWhat );
   end;
 
 end.

@@ -1391,6 +1391,9 @@ begin
   var oThread := ResolveThread( RequireStoppedProcess, AReq );
   var iMax := OptInteger( AReq, 'max', STACK_DEFAULT_MAX );
   if iMax < 1 then iMax := 1;
+  //  The debugger's headers carry every field of every object parameter (over 20 KB for one form Self, 2026-10-30):
+  //  the routine's name by default, the whole header only on request.
+  var bParams := OptBoolean( AReq, 'params', False );
 
   case oThread.StartCallStackAccess of
     csWait:
@@ -1423,7 +1426,10 @@ begin
         var oFrame := TJSONObject.Create;
         oFrames.AddElement( oFrame );
         oFrame.AddPair( 'index', TJSONNumber.Create( iFrame ) );
-        oFrame.AddPair( 'header', oThread.CallHeaders[ iFrame ] );
+        if bParams then
+          oFrame.AddPair( 'header', oThread.CallHeaders[ iFrame ] )
+        else
+          oFrame.AddPair( 'header', BriefCallHeader( oThread.CallHeaders[ iFrame ] ) );
         oFrame.AddPair( 'file', sFile );
         oFrame.AddPair( 'line', TJSONNumber.Create( iLine ) );
       end;

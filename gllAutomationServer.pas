@@ -348,6 +348,35 @@ var
   /// </summary>
   GCommands         : TDictionary<string, TRegisteredCommand> = nil;
 
+var
+  /// <summary>Set by this unit's finalization: from then on the table is gone for good, and is not re-created.</summary>
+  GCommandsFinalized: Boolean = False;
+
+/// <summary>The command table, created on first use.
+///  <para>Not left to this unit's initialization alone: inside the IDE (2026-10-30) gllIdeAutomation's first
+///  <c>RegisterCommand</c> met a nil table, an access violation in <c>TMonitor.GetMonitor( nil )</c> that its
+///  start-up swallowed, so the server answered ping with no IDE command at all.  WHY the table was nil is not
+///  established: the IDE package requires this one, whose initialization should therefore have run first.  Creating
+///  the table on first use removes the failure whatever the order (proved live); the start-up log in
+///  gllIdeAutomation records any recurrence.  Created under an atomic compare-exchange, so two threads asking at
+///  once cannot both create it.</para></summary>
+/// <returns>The table; never nil.</returns>
+/// <exception cref="EInvalidOpException">Asked for after this unit's finalization, which would otherwise re-create
+///  a table nothing frees.</exception>
+function CommandTable: TDictionary<string, TRegisteredCommand>;
+begin
+
+  Result            := GCommands;
+  if Result <> nil then Exit;
+  if GCommandsFinalized then
+    raise EInvalidOpException.Create( 'gllAutomationServer is finalized; no command can be registered any more' );
+  var oNew          := TDictionary<string, TRegisteredCommand>.Create;
+  if TInterlocked.CompareExchange( Pointer( GCommands ), Pointer( oNew ), nil ) <> nil then
+    oNew.Free;   // another thread won the race
+  Result            := GCommands;
+
+end;
+
 /// <summary>Looks up a registered command.</summary>
 /// <param name="AName">The command name as the request gave it.</param>
 /// <param name="ACommand">Receives the command when found.</param>
@@ -4247,16 +4276,17 @@ begin
   rCommand.Handler  := AHandler;
   rCommand.Thread   := AThread;
 
-  System.TMonitor.Enter( GCommands );
+  var oTable        := CommandTable;
+  System.TMonitor.Enter( oTable );
   try
     //  Refused, not replaced: with AddOrSetValue a second package silently took the name over, and the first package's
     //  UnregisterCommand then removed the second's command.
-    if GCommands.ContainsKey( LowerCase( Trim( AName ) ) ) then
+    if oTable.ContainsKey( LowerCase( Trim( AName ) ) ) then
       raise EArgumentException.CreateFmt( 'RegisterCommand( %s ): that name is registered already; ' +
         'UnregisterCommand it first', [ AName ] );
-    GCommands.Add( LowerCase( Trim( AName ) ), rCommand );
+    oTable.Add( LowerCase( Trim( AName ) ), rCommand );
   finally
-    System.TMonitor.Exit( GCommands );
+    System.TMonitor.Exit( oTable );
   end;
 
 end;
@@ -4276,11 +4306,12 @@ begin
 end;
 
 initialization
-  GCommands         := TDictionary<string, TRegisteredCommand>.Create;
+  CommandTable;   // created now when this runs first; RegisterCommand creates it otherwise
 
 finalization
-  FreeAndNil( GImpl );
+  FreeAndNil( GImpl );   // first: its destructor waits for every connection, so no worker still reads the table
   FreeAndNil( GClickMark );
+  GCommandsFinalized := True;
   FreeAndNil( GCommands );
   GKeysRunning      := nil;
   FreeAndNil( GKeyWindow );

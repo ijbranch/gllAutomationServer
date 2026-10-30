@@ -201,6 +201,16 @@ function NameListArgument( AReq: TJSONObject; const AKey, ACommand: string ): TA
 function IsBreakInStack( const AHeaders: TArray<string> ): Boolean;
 
 /// <summary>
+///   A call-stack header without its parameter list: <c>TForm1.FormCreate</c> from
+///   <c>TForm1.FormCreate(($0000...,'Form1',...),??)</c>.  The debugger dumps every field of every object parameter
+///   into the header, measured at over 20 KB for one <c>Self</c> on a form (2026-10-30), which buried
+///   <c>debug_stack</c>'s answer; the routine's name is what a caller reads.
+/// </summary>
+/// <param name="AHeader">The header as the debugger gives it.</param>
+/// <returns>The header up to its parameter list, trimmed; the header unchanged when it has none.</returns>
+function BriefCallHeader( const AHeader: string ): string;
+
+/// <summary>
 ///   Whether a file argument is a RELATIVE path: one with a folder that is not rooted at a drive or a share.  Such a path
 ///   would be resolved against the IDE's current directory, which nobody chose, so it is refused.
 /// </summary>
@@ -433,6 +443,20 @@ begin
   for var iFrame := 0 to Min( High( AHeaders ), 2 ) do
     if ContainsText( AHeaders[ iFrame ], 'DbgUiRemoteBreakin' ) then
       Exit( True );
+
+end;
+
+function BriefCallHeader( const AHeader: string ): string;
+begin
+
+  var iOpen := Pos( '(', AHeader );
+  if iOpen = 0 then
+    Result := Trim( AHeader )
+  else
+    Result := Trim( Copy( AHeader, 1, iOpen - 1 ) );
+  //  A header that STARTS with a parenthesis, such as "(no debug info)", has no name to keep: keep it whole.
+  if Result = '' then
+    Result := Trim( AHeader );
 
 end;
 

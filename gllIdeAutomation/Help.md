@@ -150,7 +150,7 @@ matching) live in `gllIdeAutomation.Rules`, which needs no IDE and is tested by 
 | `debug_terminate` | - | `{ terminated:true, pid }` - the one command that ends the process |
 | `debug_threads` | - | `{ pid, threads:[ { thread, name, state, current, file?, line? } ] }` |
 | `debug_set_thread` | `thread` | The thread, as in `debug_threads` |
-| `debug_stack` | `thread?`, `max?` | `{ thread, count, frames:[ { index, header, file, line } ] }` - what the Call Stack pane shows. `max` defaults to 100 |
+| `debug_stack` | `thread?`, `max?`, `params?` | `{ thread, count, frames:[ { index, header, file, line } ] }` - what the Call Stack pane shows. `max` defaults to 100. `header` is the routine's name; `params:true` gives the debugger's whole header, whose parameter dump runs to tens of KB for an object parameter |
 | `debug_registers` | `thread?` | `{ thread, bits, registers:{ rax … r15, rip, eflags } }` (or the 32-bit set in the 32-bit IDE), as hex |
 | `debug_memory` | `address`, `count?` | `{ address, requested, read, hex, stoppedAt?, reason? }`. `address` is a number, `$hex` or `0xhex`; `count` defaults to 64, at most 4096. Read a page at a time, so a range running into unreadable memory returns what it could |
 | `debug_eval` | `expr`, `thread?`, `sideEffects?` | `{ expr, result, canModify, address, size }` - the IDE's own evaluator, so the text is what the IDE shows |

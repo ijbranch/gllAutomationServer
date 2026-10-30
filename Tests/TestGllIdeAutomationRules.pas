@@ -61,6 +61,12 @@ type
     [Test] procedure OptArguments_KeepTheirDefault_WhenAbsent;
     /// <summary>A present optional argument of the wrong JSON type is BadRequest, never silently converted or defaulted.</summary>
     [Test] procedure OptArguments_OfTheWrongType_AreBadRequest;
+    /// <summary>
+    ///   A call-stack header loses its parameter dump and keeps the routine's name, exactly; a header without a
+    ///   parameter list is kept whole.  The debugger's dump measured over 20 KB for one form <c>Self</c>
+    ///   (2026-10-30), which buried <c>debug_stack</c>'s answer.
+    /// </summary>
+    [Test] procedure BriefCallHeader_KeepsTheRoutineNameOnly;
     /// <summary>A required string that is missing, blank or not a string is BadRequest; a required number that is a string is too.</summary>
     [Test] procedure NeedArguments_RefuseMissingBlankOrMistyped;
     /// <summary><c>wait</c> is clamped to 0..120000, so a mistyped one cannot hold a connection for an hour.</summary>
@@ -203,6 +209,22 @@ begin
   finally
     oReq.Free;
   end;
+
+end;
+
+procedure TTestGllIdeAutomationRules.BriefCallHeader_KeepsTheRoutineNameOnly;
+begin
+
+  //  The shapes the Delphi 13 debugger gave in the live run of 2026-10-30.
+  Assert.AreEqual( 'TForm1.FormCreate', BriefCallHeader( 'TForm1.FormCreate(($00000282F3BB6DE0,''Form1'',0,nil),??)' ),
+    False, 'a method with an object parameter keeps its name only' );
+  Assert.AreEqual( ':00007FF7F9EB8D5A TCustomForm.DoCreate', BriefCallHeader( ':00007FF7F9EB8D5A TCustomForm.DoCreate(($00007FF7F9EB87B5))' ),
+    False, 'the address prefix of a frame without source stays' );
+  Assert.AreEqual( ':00007FFDA7A13123 DebugBreak', BriefCallHeader( ':00007FFDA7A13123 DebugBreak' ), False,
+    'a header without a parameter list is kept whole' );
+  Assert.AreEqual( 'Run', BriefCallHeader( '  Run()  ' ), False, 'blanks around it are trimmed' );
+  Assert.AreEqual( '(no debug info)', BriefCallHeader( '(no debug info)' ), False,
+    'a header that starts with a parenthesis has no name to keep, so it is kept whole, never emptied' );
 
 end;
 
