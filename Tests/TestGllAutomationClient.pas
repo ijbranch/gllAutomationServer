@@ -115,10 +115,10 @@ type
     /// </summary>
     /// <param name="APath">The path refused.</param>
     [Test]
-    [TestCase( 'Relative', '.\button.png' )]
-    [TestCase( 'DriveRelative', 'C:button.png' )]
-    [TestCase( 'Unc', '\\localhost\c$\button.png' )]
-    [TestCase( 'Device', '\\?\C:\button.png' )]
+    [NamedTestCase( 'Relative', '.\button.png' )]
+    [NamedTestCase( 'DriveRelative', 'C:button.png' )]
+    [NamedTestCase( 'Unc', '\\localhost\c$\button.png' )]
+    [NamedTestCase( 'Device', '\\?\C:\button.png' )]
     procedure Screenshot_NotALocalPath_IsRefused( const APath: string );
     /// <summary>Proves <c>Attach</c> refuses to guess between two running apps of one name, as it does for an empty target.</summary>
     [Test]
