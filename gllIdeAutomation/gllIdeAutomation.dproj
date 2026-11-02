@@ -52,6 +52,12 @@
         <Cfg_2>true</Cfg_2>
         <Base>true</Base>
     </PropertyGroup>
+    <PropertyGroup Condition="('$(Platform)'=='Win32' and '$(Cfg_2)'=='true') or '$(Cfg_2_Win32)'!=''">
+        <Cfg_2_Win32>true</Cfg_2_Win32>
+        <CfgParent>Cfg_2</CfgParent>
+        <Cfg_2>true</Cfg_2>
+        <Base>true</Base>
+    </PropertyGroup>
     <PropertyGroup Condition="'$(Base)'!=''">
         <SanitizedProjectName>gllIdeAutomation</SanitizedProjectName>
         <DCC_CBuilderOutput>None</DCC_CBuilderOutput>
@@ -95,16 +101,24 @@
         <DCC_RemoteDebug>true</DCC_RemoteDebug>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_1_Win32)'!=''">
+        <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
+        <VerInfo_AutoIncVersion>true</VerInfo_AutoIncVersion>
+        <VerInfo_MajorVer>1</VerInfo_MajorVer>
+        <VerInfo_MinorVer>2</VerInfo_MinorVer>
+        <VerInfo_Release>0</VerInfo_Release>
         <DCC_RemoteDebug>false</DCC_RemoteDebug>
-        <VerInfo_Build>25</VerInfo_Build>
-        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllIdeAutomation;FileVersion=1.2.0.25;InternalName=gllIdeAutomation;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllIdeAutomation;ProductVersion=1.2.0.25;Comments=</VerInfo_Keys>
+        <VerInfo_Build>26</VerInfo_Build>
+        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllIdeAutomation;FileVersion=1.2.0.26;InternalName=gllIdeAutomation;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllIdeAutomation;ProductVersion=1.2.0.26;Comments=</VerInfo_Keys>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_1_Win64)'!=''">
+        <VerInfo_MajorVer>1</VerInfo_MajorVer>
+        <VerInfo_MinorVer>2</VerInfo_MinorVer>
+        <VerInfo_Release>0</VerInfo_Release>
         <DCC_RemoteDebug>false</DCC_RemoteDebug>
         <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
         <VerInfo_AutoIncVersion>true</VerInfo_AutoIncVersion>
-        <VerInfo_Build>29</VerInfo_Build>
-        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllIdeAutomation;FileVersion=1.2.0.29;InternalName=gllIdeAutomation;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllIdeAutomation;ProductVersion=1.2.0.29;Comments=</VerInfo_Keys>
+        <VerInfo_Build>30</VerInfo_Build>
+        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllIdeAutomation;FileVersion=1.2.0.30;InternalName=gllIdeAutomation;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllIdeAutomation;ProductVersion=1.2.0.30;Comments=</VerInfo_Keys>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_2)'!=''">
         <DCC_BplOutput>$(BDSCOMMONDIR)\Bpl\$(Platform)</DCC_BplOutput>
@@ -115,10 +129,21 @@
         <DCC_SymbolReferenceInfo>0</DCC_SymbolReferenceInfo>
     </PropertyGroup>
     <PropertyGroup Condition="'$(Cfg_2_Win64)'!=''">
+        <VerInfo_MajorVer>1</VerInfo_MajorVer>
+        <VerInfo_MinorVer>2</VerInfo_MinorVer>
+        <VerInfo_Release>0</VerInfo_Release>
         <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
         <VerInfo_AutoIncVersion>true</VerInfo_AutoIncVersion>
-        <VerInfo_Build>31</VerInfo_Build>
-        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllIdeAutomation;FileVersion=1.2.0.31;InternalName=gllIdeAutomation;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllIdeAutomation;ProductVersion=1.2.0.31;Comments=</VerInfo_Keys>
+        <VerInfo_Build>32</VerInfo_Build>
+        <VerInfo_Keys>CompanyName=GITLAK Software;FileDescription=gllIdeAutomation;FileVersion=1.2.0.32;InternalName=gllIdeAutomation;LegalCopyright=(C) 2026 Ian Branch (GITLAK Software). All rights reserved.;LegalTrademarks=;OriginalFilename=;ProductName=gllIdeAutomation;ProductVersion=1.2.0.32;Comments=</VerInfo_Keys>
+    </PropertyGroup>
+    <PropertyGroup Condition="'$(Cfg_2_Win32)'!=''">
+        <VerInfo_IncludeVerInfo>true</VerInfo_IncludeVerInfo>
+        <VerInfo_AutoIncVersion>true</VerInfo_AutoIncVersion>
+        <VerInfo_MajorVer>1</VerInfo_MajorVer>
+        <VerInfo_MinorVer>2</VerInfo_MinorVer>
+        <VerInfo_Release>0</VerInfo_Release>
+        <VerInfo_Build>32</VerInfo_Build>
     </PropertyGroup>
     <ItemGroup>
         <DelphiCompile Include="$(MainSource)">
