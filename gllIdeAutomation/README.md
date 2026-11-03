@@ -75,6 +75,15 @@ as an error carrying your `id`, not as a closed connection.
 
 `tools/Start-IDE.ps1` then launches the IDE correctly and tells you whether the server came up.
 
+## Known issues
+
+- **The Win32 BPL hangs the 32-bit IDE while it loads (open, found 2026-11-04).**  `bin\bds.exe`
+  stops on the splash screen at "Loading package gllIdeAutomation370.bpl" and spins one core.  It is
+  not a deadlock: code in the package's initialisation calls through a corrupted address (a stack
+  address), and the access violation is redispatched endlessly.  The Win64 BPL in `bin64\bds.exe`
+  is not affected.  Until it is fixed, leave the Win32 BPL out of `Known Packages`; it still builds
+  clean, so a clean build is no evidence that it loads.
+
 ## Gating — it does nothing unless you ask
 
 Installing the package does not start anything. The server starts only when the environment

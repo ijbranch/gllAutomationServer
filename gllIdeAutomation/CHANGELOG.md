@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - (2026-10-08) **Unused `System.StrUtils`** - `gllIdeAutomation.IdeCommands.pas`. Left behind when its `IfThen` call became an `if` expression; the removal compiled with identical code bytes.
 
 ### Changed
+- (2026-11-04) **Known issue recorded: the Win32 BPL hangs the 32-bit IDE while it loads** - `README.md`.  New *Known issues* section.  The 32-bit IDE spins on the splash screen at "Loading package gllIdeAutomation370.bpl": code in the package's initialisation calls through a stack address, and the access violation is redispatched endlessly.  Win64 is not affected.  Not yet fixed; until then the Win32 BPL stays out of `Known Packages`.
 - (2026-11-03) **PowerShell scripts declare their edition** — `tools/Start-IDE.ps1`.  Each states #Requires -PSEdition
   Core (global `standards\powershell-editions.md`).
 
