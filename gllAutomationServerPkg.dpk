@@ -31,9 +31,18 @@
   Runtime-only: registers no components and is never installed into the IDE itself. An
   application links the unit statically (library path); gllIdeAutomation, which IS installed,
   loads this package through its requires clause.
+
+  The package is named gllAutomationServerPkg, NOT gllAutomationServer, and must never share a
+  name with a unit it contains.  With the same name the BPL exports two different routines under
+  one mangled name, @Gllautomationserver@initialization: the unit's initialization and the
+  package's own entry stub.  A package that requires this one imports the unit's initialization
+  by name and the loader can bind it to the entry stub instead, a stdcall routine ending ret 0Ch.
+  On Win64 the caller cleans the stack, so nothing showed; on Win32 every unit-init call through
+  it popped 12 extra bytes, wrecking InitUnits' frame and SEH chain, and the 32-bit IDE spun for
+  ever in exception dispatch on loading gllIdeAutomation (2026-11-04).
 *)
 
-package gllAutomationServer;
+package gllAutomationServerPkg;
 
 {$R *.res}
 {$IFDEF IMPLICITBUILDING This IFDEF should not be used by users}

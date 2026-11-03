@@ -69,7 +69,7 @@ as an error carrying your `id`, not as a closed connection.
    it, and the wrong one silently never loads. Both platforms are configured and both build clean.
 
    It needs Delphi 13 Florence or later: the units stop with `{$MESSAGE FATAL}` on an older IDE.
-   Build the `gllAutomationServer` package at the repository root first: this package `requires` it.
+   Build the `gllAutomationServerPkg` package at the repository root first: this package `requires` it.
 2. **Component > Install Packages > Add**, and pick the built BPL. Note the registration is
    per-bitness: the 64-bit IDE reads `Known Packages x64`, the 32-bit IDE reads `Known Packages`.
 
@@ -77,12 +77,12 @@ as an error carrying your `id`, not as a closed connection.
 
 ## Known issues
 
-- **The Win32 BPL hangs the 32-bit IDE while it loads (open, found 2026-11-04).**  `bin\bds.exe`
-  stops on the splash screen at "Loading package gllIdeAutomation370.bpl" and spins one core.  It is
-  not a deadlock: code in the package's initialisation calls through a corrupted address (a stack
-  address), and the access violation is redispatched endlessly.  The Win64 BPL in `bin64\bds.exe`
-  is not affected.  Until it is fixed, leave the Win32 BPL out of `Known Packages`; it still builds
-  clean, so a clean build is no evidence that it loads.
+- **Fixed 2026-11-04: the Win32 BPL hung the 32-bit IDE while it loaded.**  `bin\bds.exe` stopped
+  on the splash screen at "Loading package gllIdeAutomation370.bpl", spinning one core.  The cause
+  was the server package sharing its name with its main unit, which made the unit's initialization
+  import bind to the package's entry stub; the package is now `gllAutomationServerPkg` (see the
+  repository's `CHANGELOG.md`).  The lesson stands: a clean build is no evidence that a package loads,
+  so load both bitnesses after a change to either package.
 
 ## Gating — it does nothing unless you ask
 

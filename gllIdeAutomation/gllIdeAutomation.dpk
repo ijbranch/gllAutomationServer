@@ -40,7 +40,7 @@ requires
   rtl,
   vcl,
   designide,
-  gllAutomationServer;
+  gllAutomationServerPkg;
 
 contains
   gllIdeAutomation.Starter in 'src\gllIdeAutomation.Starter.pas',

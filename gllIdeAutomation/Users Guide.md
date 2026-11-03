@@ -10,7 +10,7 @@ same model your own applications use. This package starts a small server inside 
 exposes that model over a loopback socket, so instead of synthesising keystrokes and reading
 pixels you ask the IDE what it has and tell it what to do.
 
-The server is not part of this package: it is the shared runtime package `gllAutomationServer`
+The server is not part of this package: it is the shared runtime package `gllAutomationServerPkg`
 (at the repository root, documented in its [`Help.md`](../Help.md)), the same one any other GITLAK host uses.
 This package adds the gate that starts it inside the IDE and 22 commands only the IDE needs:
 `tree_text` and the ToolsAPI set.
@@ -27,7 +27,7 @@ instead and let that IDE write its own `.dproj` beside it — the `.dpk` is the 
 version-agnostic; the `.dproj` here is the MSBuild wrapper Delphi 13 generated. Do not commit the
 one yours produces.)
 
-**Build `gllAutomationServer` first**, in all four modes: this package `requires` it, and Indy,
+**Build `gllAutomationServerPkg` first**, in all four modes: this package `requires` it, and Indy,
 `vclimg` and `dbrtl` reach this package through it.
 
 Build **all four modes** — Win32 + Win64 × Debug + Release. It is a package, and a package is only
@@ -63,7 +63,7 @@ Do this from **`bin64\bds.exe`**. Registration is per IDE bitness: the 64-bit ID
 32-bit IDE writes it into a key where it can never load, and the symptom is not a package error
 but `Error Reading Form: Class TXxx not found` later, in an unrelated form.
 
-`gllAutomationServer` is a runtime package and is not installed itself; the IDE loads it with this
+`gllAutomationServerPkg` is a runtime package and is not installed itself; the IDE loads it with this
 one, from the shared `Bpl\<Platform>` folder on `PATH`.
 
 Installing starts nothing. The package is inert until you set the gate.
@@ -153,7 +153,7 @@ $r.ReadLine() | ConvertFrom-Json
 protocol version (`0.12`). The two version fields are **not** the same thing and the distinction is
 the point: `version` is the **host's** — inside the IDE that is `bds.exe`'s, something like
 `37.0.60952.8797` — while `package` is the version of the BPL holding the server, which is now
-the shared `gllAutomationServer` package (`1.0.0.0`), not this one. To tell which build of
+the shared `gllAutomationServerPkg` package (`1.0.0.0`), not this one. To tell which build of
 `gllIdeAutomation` the IDE has loaded, read its BPL's file version (§14). If that returns,
 everything from here is detail.
 
@@ -436,7 +436,7 @@ physical. Two further points, both learned by getting them wrong:
 ## 13. The dataset commands
 
 `dataset`, `dataset_op`, `field_get` and `field_set` come from the server's origin — driving
-database applications under test — and they are why the `gllAutomationServer` package requires
+database applications under test — and they are why the `gllAutomationServerPkg` package requires
 `dbrtl`. Against the
 IDE itself they have little use, but they cost nothing and they work against any VCL application
 this server is hosted in.

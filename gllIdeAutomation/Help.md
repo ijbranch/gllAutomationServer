@@ -13,7 +13,7 @@ and a `{$LIBSUFFIX}` ladder, from when the package was public). Proprietary, in-
 This file is the **lookup** document for what this package adds: the gate, the 38 commands it
 registers, their error codes, and the IDE-specific failures with their exact text. The automation
 server itself (transport, discovery, addressing, the built-in commands and their error codes,
-threading, `keys`) is the runtime package `gllAutomationServer`, documented in
+threading, `keys`) is the runtime package `gllAutomationServerPkg` (unit `gllAutomationServer`), documented in
 [`../Help.md`](../Help.md) ([GitHub](https://github.com/ijbranch/gllAutomationServer)).
 For how to get it running and drive it, read
 [Users Guide.md](Users%20Guide.md). The history is in [CHANGELOG.md](CHANGELOG.md); the
@@ -26,12 +26,12 @@ rationale and the tooling are in [README.md](README.md).
 The units are in `src\`, all listed in the `.dpk` `contains` clause: `gllIdeAutomation.Starter`,
 `gllIdeAutomation.TreeText` and `gllIdeAutomation.IdeCommands`. There is no component to drop on
 a form and no public class of this package's own: everything is built on `TAutomationServer` from
-the `gllAutomationServer` runtime package.
+the `gllAutomationServerPkg` runtime package.
 
 ### What it uses from `gllAutomationServer`
 
 The server is its own package, at the root of this repository (unit
-`gllAutomationServer`, package version 1.0.0.0, wire protocol version `0.14`), which this package
+`gllAutomationServer`, package `gllAutomationServerPkg`, version 1.0.0.0, wire protocol version `0.14`), which this package
 `requires`. Its full API is in [`../Help.md`](../Help.md); the parts used here:
 
 | Member | Used for |
@@ -78,7 +78,7 @@ alive before trusting it. The server sweeps dead PIDs' files on start.
 
 The built-in commands are `ping` / `info`, `tree`, `get`, `set`, `click`, `action`, `keys`,
 `dialogs`, `screenshot`, `dataset`, `dataset_op`, `field_get` and `field_set`. Inside the IDE,
-`ping` reports `version` as `bds.exe`'s, `package` as the `gllAutomationServer` BPL's (`1.0.0.0`)
+`ping` reports `version` as `bds.exe`'s, `package` as the `gllAutomationServerPkg` BPL's (`1.0.0.0`)
 and `server` as the protocol version (`0.14`). The server's `close` is refused here (`HostedInIde`): `ide_quit` closes the IDE. Since 0.11 a component `name` may be a dotted path
 (`fraA.edtTown`) or a synthetic name for an unnamed component (`@TButton#2`), reaches frame-owned
 and docked controls, and a name that matches several is `Ambiguous`; `prop` may be a dotted path
@@ -310,7 +310,7 @@ for Win64 Release and Win64 Debug, and the BPL reports the number from before th
 
 `gllIdeAutomation.dproj` is a package project and follows the estate package rules.
 
-- **Build `gllAutomationServer` first, in all four modes.** This package `requires` it, so its
+- **Build `gllAutomationServerPkg` first, in all four modes.** This package `requires` it, so its
   `.dcp` must exist for the platform and configuration being built, and its BPL must be on `PATH`
   (the shared `Bpl\<Platform>` folder) for the IDE to load this one. After a change to the server,
   rebuild it and then this package.

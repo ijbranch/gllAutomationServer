@@ -62,13 +62,15 @@ Administrators and SYSTEM can read.
 
 ## Building
 
-`gllAutomationServer.dproj` is a runtime-only package (`{$RUNONLY}`). Build all four modes (Win32 and
-Win64, Debug and Release). The DCUs land in `37.0\<Platform>\<Config>`, and the BPL and DCP go to the
+`gllAutomationServerPkg.dproj` is a runtime-only package (`{$RUNONLY}`). Build all four modes (Win32 and
+Win64, Debug and Release).  The package is `gllAutomationServerPkg` (`gllAutomationServerPkg370.bpl`), not
+`gllAutomationServer`: a package must never share a name with a unit it contains (see the `.dpk` header;
+on Win32 the clash hung every IDE that loaded a package requiring this one). The DCUs land in `37.0\<Platform>\<Config>`, and the BPL and DCP go to the
 shared `Bpl` / `Dcp` folders (Release in `<Platform>`, Debug in `<Platform>\Debug`).
 
 - **An application** links the unit statically: put `<your clone>\37.0\<Platform>\Release`
   on the IDE's library path (Tools > Options > Language > Delphi > Library) for both platforms.
-- **A package** that uses it (gllIdeAutomation does) puts `gllAutomationServer` in its `requires`
+- **A package** that uses it (gllIdeAutomation does) puts `gllAutomationServerPkg` in its `requires`
   clause.
 
 ## Tests
@@ -95,7 +97,8 @@ that need a painted window and ignore themselves without one.
 ## Repository layout
 
 ```
-gllAutomationServer.dpk / .dproj / .pas   the server - a runtime package, linked by applications
+gllAutomationServerPkg.dpk / .dproj      the runtime package
+gllAutomationServer.pas                   the server unit, linked statically by applications
 Tests\                                    its DUnitX suite
 gllIdeAutomation\                         the IDE host - a design-time package that requires the server
 ```

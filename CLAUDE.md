@@ -22,7 +22,7 @@ a registered command (`RegisterCommand` + `ResolveForm` / `ResolveComponent`), n
 - **27 DBiWorkflow apps** link it statically through the library path
   (on the owner's machine, `D:\gllAutomationServer\37.0\<Platform>\Release`, in `Library\Win32`/`Win64` and `EnvOptions.proj`).
   A change reaches an app only when the app is rebuilt.
-- **gllIdeAutomation** (in `gllIdeAutomation\`) `requires` the package; the IDE loads `gllAutomationServer370.bpl` from the shared
+- **gllIdeAutomation** (in `gllIdeAutomation\`) `requires` the package; the IDE loads `gllAutomationServerPkg370.bpl` from the shared
   `Bpl\<Platform>` folder. **Close the IDE before building Release** (`F2039` otherwise), and restart it to
   pick up a change.
 - **GITLAKMCP**'s `app_*` tools are the client (`src\Tools\GitLAKMCP.Tool.AppAutomation.pas`). A new
