@@ -264,6 +264,32 @@ type
     /// <summary>A path ending on a non-strings object is refused as NotScalar, with that object's properties in error.data so the caller can pick one.</summary>
     [Test] procedure ObjectProperty_IsNotScalar_AndListsItsProperties;
     /// <summary>
+    ///   An event wired to a published method reads as Class.Method with its unit beside it, so a caller learns what
+    ///   a control really calls without opening the source.  The handler's object is a TEventSinkChild that only
+    ///   inherits it, and the reply names TEventSink, the declaring class, as a child form's inherited handler must
+    ///   name the base form.  Before 0.15 get could not read an event at all.
+    /// </summary>
+    [Test] procedure Event_ReadsAsItsHandlerName;
+    /// <summary>
+    ///   An event wired in code to a private method reads with its class and a null method (the method table holds
+    ///   published methods only), and an unassigned event reads as null, never as an address or an error.
+    /// </summary>
+    [Test] procedure UnpublishedAndUnassignedEvents_ReadAsClassOnlyAndNull;
+    /// <summary>@events lists every assigned event with its handler and leaves the unassigned ones out.</summary>
+    [Test] procedure AtEvents_ListsOnlyTheAssignedEvents;
+    /// <summary>set refuses an event as ReadOnlyProp rather than writing something into the method pointer.</summary>
+    [Test] procedure Event_IsReadOnlyToSet;
+    /// <summary>
+    ///   A NoProp failure's read view lists the assigned event, AFTER every property so an event can never push a
+    ///   property past the cap, while the writable view (set's) leaves it out because set cannot write it.
+    /// </summary>
+    [Test] procedure NoProp_ListsAssignedEventsLast_InTheReadViewOnly;
+    /// <summary>
+    ///   Hand-built handlers that are no object's method read without a crash: nil data as a procedure address, and
+    ///   data whose "VMT" cannot be read as a handler address, and the NoProp listing still answers with them wired.
+    /// </summary>
+    [Test] procedure NonObjectHandlers_ReadWithoutACrash;
+    /// <summary>
     ///   keys types through the message loop: Shift-produced characters arrive in the right case, a named
     ///   key after the text acts on it (Backspace removes the last character), and the reply comes only
     ///   once every stroke is delivered, so a read straight afterwards sees all of it.
@@ -375,7 +401,7 @@ type
 implementation
 
 uses
-  System.SysUtils, System.IOUtils, System.Diagnostics, System.Generics.Collections,
+  System.SysUtils, System.IOUtils, System.Diagnostics, System.Generics.Collections, System.TypInfo,
   Winapi.Windows, Winapi.Messages, Winapi.ShellAPI,
   Vcl.Graphics, Vcl.Themes,
   IdTCPClient, IdGlobal,
@@ -390,7 +416,7 @@ const
   /// <summary>Name the test process registers under.</summary>
   APP_NAME        = 'gllAutomationServerTests';
   /// <summary>The wire-protocol version ping must report.</summary>
-  PROTOCOL_VERSION = '0.14';
+  PROTOCOL_VERSION = '0.15';
   /// <summary>Name of the test form, which the requests address.</summary>
   FORM_NAME       = 'AutoTestForm';
 
@@ -420,6 +446,33 @@ type
     /// <summary>The point of the last drop, in client coordinates.</summary>
     DropPoint: TPoint;
   end;
+
+type
+  /// <summary>Owns a published event handler, as a form owns its designer-wired ones, so get can name it.</summary>
+  TEventSink = class( TComponent )
+  published
+    /// <summary>The memo's OnChange handler; does nothing, it exists to be named.</summary>
+    /// <param name="Sender">The memo.</param>
+    procedure SinkChange( Sender: TObject );
+  end;
+
+  /// <summary>Inherits SinkChange without redeclaring it, as a child form inherits its base form's handlers: get must name TEventSink, where the source is.</summary>
+  TEventSinkChild = class( TEventSink );
+
+procedure TEventSink.SinkChange( Sender: TObject );
+begin
+  // named, not run: the event tests only read which handler is wired
+end;
+
+/// <summary>A plain procedure whose address stands in as the code of a hand-built TMethod; never called.</summary>
+procedure NotAMethod;
+begin
+  // its address is all the tests need
+end;
+
+var
+  /// <summary>A data pointer that is no object: reading its "VMT" at $10 faults, which the server must survive.</summary>
+  GNotAnObject: NativeInt = $10;
 
 type
   /// <summary>A custom-drawn button, like Ethea's TStyledButton: "button" in its class name, not built on the system Button class, so BM_CLICK does nothing to it.</summary>
@@ -507,6 +560,9 @@ begin
   FMemo.Parent := FForm;
   FMemo.Lines.Text := 'line one' + sLineBreak + 'line two';
   FMemo.SetBounds( 200, 10, 150, 90 );
+  var oSink := TEventSinkChild.Create( FForm );
+  oSink.Name := 'evtSink';
+  FMemo.OnChange := oSink.SinkChange;
   // No Color: the suite runs under the Aqua Light Slate style, which paints the memo's client in its own edit
   // colour.  The screenshot tests assert that styled colour, and the memo's text, rather than a colour of ours.
 
@@ -1005,6 +1061,148 @@ begin
   finally
     oReply.Free;
   end;
+
+end;
+
+procedure TTestGllAutomationServer.Event_ReadsAsItsHandlerName;
+begin
+
+  var oReply := Send( 'get', Format( '{"form":"%s","name":"Memo1","prop":"OnChange"}', [ FORM_NAME ] ) );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Assert.AreEqual( 'TEventSink.SinkChange', oReply.GetValue<string>( 'result.value' ), False );
+    Assert.AreEqual( 'TEventSink', oReply.GetValue<string>( 'result.handler.class' ), False );
+    Assert.AreEqual( 'SinkChange', oReply.GetValue<string>( 'result.handler.method' ), False );
+    Assert.AreEqual( 'TestGllAutomationServer', oReply.GetValue<string>( 'result.handler.unit' ), False );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.UnpublishedAndUnassignedEvents_ReadAsClassOnlyAndNull;
+begin
+
+  var oPrivate := Send( 'get', Format( '{"form":"%s","name":"pnlClick","prop":"OnClick"}', [ FORM_NAME ] ) );
+  try
+    Assert.IsTrue( oPrivate.GetValue<Boolean>( 'ok' ), oPrivate.ToJSON );
+    Assert.AreEqual( 'TTestGllAutomationServer.<unpublished method>', oPrivate.GetValue<string>( 'result.value' ), False );
+    Assert.AreEqual( 'TTestGllAutomationServer', oPrivate.GetValue<string>( 'result.handler.class' ), False );
+    Assert.IsTrue( oPrivate.FindValue( 'result.handler.method' ) is TJSONNull, oPrivate.ToJSON );
+  finally
+    oPrivate.Free;
+  end;
+
+  var oNone := Send( 'get', Format( '{"form":"%s","name":"pnlClick","prop":"OnDblClick"}', [ FORM_NAME ] ) );
+  try
+    Assert.IsTrue( oNone.GetValue<Boolean>( 'ok' ), oNone.ToJSON );
+    Assert.IsTrue( oNone.FindValue( 'result.value' ) is TJSONNull, oNone.ToJSON );
+    Assert.IsNull( oNone.FindValue( 'result.handler' ), 'an unassigned event has no handler: ' + oNone.ToJSON );
+  finally
+    oNone.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.AtEvents_ListsOnlyTheAssignedEvents;
+begin
+
+  var oReply := Send( 'get', Format( '{"form":"%s","name":"pnlClick","prop":"@events"}', [ FORM_NAME ] ) );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    var oEvents := oReply.GetValue<TJSONObject>( 'result.value' );
+    Assert.AreEqual( 2, oEvents.Count, 'OnClick and OnMouseDown only: ' + oReply.ToJSON );
+    Assert.AreEqual( 'TTestGllAutomationServer.<unpublished method>', oEvents.GetValue<string>( 'OnClick' ), False );
+    Assert.IsNotNull( oEvents.GetValue( 'OnMouseDown' ), oReply.ToJSON );
+    Assert.IsNull( oEvents.GetValue( 'OnDblClick' ), 'an unassigned event was listed: ' + oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.Event_IsReadOnlyToSet;
+begin
+
+  Assert.AreEqual( 'ReadOnlyProp',
+    SendFail( 'set', Format( '{"form":"%s","name":"Memo1","prop":"OnChange","value":"x"}', [ FORM_NAME ] ) ), False );
+  Assert.AreEqual( 'ReadOnlyProp',
+    SendFail( 'set', Format( '{"form":"%s","name":"Memo1","prop":"@events","value":"x"}', [ FORM_NAME ] ) ), False );
+
+  var oReply := Send( 'get', Format( '{"form":"%s","name":"Memo1","prop":"OnChange"}', [ FORM_NAME ] ) );
+  try
+    Assert.AreEqual( 'TEventSink.SinkChange', oReply.GetValue<string>( 'result.value' ), False, 'the refused set changed the handler' );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.NoProp_ListsAssignedEventsLast_InTheReadViewOnly;
+begin
+
+  var oRead := Send( 'get', Format( '{"form":"%s","name":"Memo1","prop":"NoSuchProp"}', [ FORM_NAME ] ) );
+  try
+    Assert.AreEqual( 'NoProp', oRead.GetValue<string>( 'error.code' ), False );
+    var oProps := oRead.GetValue<TJSONArray>( 'error.data.properties' );
+    var oLast := TJSONObject( oProps.Items[ oProps.Count - 1 ] );
+    Assert.AreEqual( 'OnChange', oLast.GetValue<string>( 'name' ), False, 'the event is not listed last: ' + oRead.ToJSON );
+    Assert.AreEqual( 'TEventSink.SinkChange', oLast.GetValue<string>( 'value' ), False );
+  finally
+    oRead.Free;
+  end;
+
+  var oWrite := Send( 'set', Format( '{"form":"%s","name":"Memo1","prop":"NoSuchProp","value":1}', [ FORM_NAME ] ) );
+  try
+    Assert.AreEqual( 'NoProp', oWrite.GetValue<string>( 'error.code' ), False );
+    for var oProp in oWrite.GetValue<TJSONArray>( 'error.data.properties' ) do
+      Assert.AreNotEqual( 'OnChange', TJSONObject( oProp ).GetValue<string>( 'name' ), 'set''s writable view listed an event' );
+  finally
+    oWrite.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.NonObjectHandlers_ReadWithoutACrash;
+begin
+
+  var rNilData: TMethod;
+  rNilData.Code := @NotAMethod;
+  rNilData.Data := nil;
+  SetMethodProp( FClickPanel, 'OnDblClick', rNilData );
+
+  var rWild: TMethod;
+  rWild.Code := @NotAMethod;
+  rWild.Data := Pointer( GNotAnObject );
+  SetMethodProp( FClickPanel, 'OnResize', rWild );
+
+  var oNil := Send( 'get', Format( '{"form":"%s","name":"pnlClick","prop":"OnDblClick"}', [ FORM_NAME ] ) );
+  try
+    Assert.IsTrue( oNil.GetValue<Boolean>( 'ok' ), oNil.ToJSON );
+    Assert.StartsWith( '<procedure at $', oNil.GetValue<string>( 'result.value' ), False );
+  finally
+    oNil.Free;
+  end;
+
+  var oWild := Send( 'get', Format( '{"form":"%s","name":"pnlClick","prop":"OnResize"}', [ FORM_NAME ] ) );
+  try
+    Assert.IsTrue( oWild.GetValue<Boolean>( 'ok' ), oWild.ToJSON );
+    Assert.StartsWith( '<handler at $', oWild.GetValue<string>( 'result.value' ), False );
+    Assert.IsTrue( oWild.FindValue( 'result.handler.class' ) is TJSONNull, oWild.ToJSON );
+  finally
+    oWild.Free;
+  end;
+
+  var oList := Send( 'get', Format( '{"form":"%s","name":"pnlClick","prop":"NoSuchProp"}', [ FORM_NAME ] ) );
+  try
+    Assert.AreEqual( 'NoProp', oList.GetValue<string>( 'error.code' ), False, 'the NoProp listing broke on a non-object handler: ' + oList.ToJSON );
+  finally
+    oList.Free;
+  end;
+
+  // Unwire them: the form is freed after the test, and nothing must ever call through these.
+  SetMethodProp( FClickPanel, 'OnDblClick', Default( TMethod ) );
+  SetMethodProp( FClickPanel, 'OnResize', Default( TMethod ) );
 
 end;
 

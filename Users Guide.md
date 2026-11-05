@@ -48,6 +48,7 @@ Read what is on screen, then act on it:
 |---|---|
 | See the forms and their components | `tree` (`app_tree`); `deep:true` adds frame and docked controls |
 | Read or write a property | `get` / `set` — `Caption`, `Font.Size`, `Lines` |
+| See what a control calls | `get` an event — `OnClick` → `TfrmMain.btnSaveClick`; `@events` for every assigned one (read-only) |
 | Click a button | `click` — `mode:"message"` if the click opens a modal |
 | Click at a place in a control (a grid cell, a list row) | `click_at` — `x`, `y` in the control's client coordinates, `shift:"Ctrl"` |
 | Drop files on a control | `drop_files` — `files:["D:\\Data\\a.csv"]`, as Explorer does |

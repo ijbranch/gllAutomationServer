@@ -31,7 +31,7 @@ the `gllAutomationServerPkg` runtime package.
 ### What it uses from `gllAutomationServer`
 
 The server is its own package, at the root of this repository (unit
-`gllAutomationServer`, package `gllAutomationServerPkg`, version 1.0.0.0, wire protocol version `0.14`), which this package
+`gllAutomationServer`, package `gllAutomationServerPkg`, version 1.0.0.0, wire protocol version `0.15`), which this package
 `requires`. Its full API is in [`../Help.md`](../Help.md); the parts used here:
 
 | Member | Used for |
@@ -79,7 +79,7 @@ alive before trusting it. The server sweeps dead PIDs' files on start.
 The built-in commands are `ping` / `info`, `tree`, `get`, `set`, `click`, `action`, `keys`,
 `dialogs`, `screenshot`, `dataset`, `dataset_op`, `field_get` and `field_set`. Inside the IDE,
 `ping` reports `version` as `bds.exe`'s, `package` as the `gllAutomationServerPkg` BPL's (`1.0.0.0`)
-and `server` as the protocol version (`0.14`). The server's `close` is refused here (`HostedInIde`): `ide_quit` closes the IDE. Since 0.11 a component `name` may be a dotted path
+and `server` as the protocol version (`0.15`).  Since 0.15 `get` reads an event as the handler it is wired to (`prop:"OnClick"`), and `@events` lists every assigned one. The server's `close` is refused here (`HostedInIde`): `ide_quit` closes the IDE. Since 0.11 a component `name` may be a dotted path
 (`fraA.edtTown`) or a synthetic name for an unnamed component (`@TButton#2`), reaches frame-owned
 and docked controls, and a name that matches several is `Ambiguous`; `prop` may be a dotted path
 (`Font.Size`) and `TStrings` read and write as text.

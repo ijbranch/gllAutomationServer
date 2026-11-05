@@ -242,11 +242,13 @@ const
   /// <summary>Number of consecutive ports probed from <c>AUTOMATION_PORT_BASE</c> before the bind attempt is abandoned.</summary>
   AUTOMATION_PORT_SPAN = 200; // ports to try before giving up
   /// <summary>Wire-protocol/feature version reported by the <c>ping</c>/<c>info</c> command's <c>server</c> field; bump when commands change.</summary>
-  SERVER_VERSION    = '0.14'; // + screenshot path, the Client unit · 0.13: click_at, drop_files, dialogs hwnd/outcome/clickable/modal/texts · 0.12: screenshot name/form render, maxWidth · 0.11: reachable/synthetic/path names, dotted props · 0.10: keys · 0.9: registered commands · 0.8: click count/stoppedReason · set changed/previous
+  SERVER_VERSION    = '0.15'; // + get reads events (handler names), @events · 0.14: screenshot path, the Client unit · 0.13: click_at, drop_files, dialogs hwnd/outcome/clickable/modal/texts · 0.12: screenshot name/form render, maxWidth · 0.11: reachable/synthetic/path names, dotted props · 0.10: keys · 0.9: registered commands · 0.8: click count/stoppedReason · set changed/previous
   /// <summary>Upper bound on <c>click</c>'s <c>count</c> (a mistyped count must not lock the UI thread for minutes).</summary>
   CLICK_COUNT_MAX   = 1000;
   /// <summary>Upper bound on the property list returned with a <c>NoProp</c> failure; the reply is read by an agent, so it stays bounded.</summary>
   PROPLIST_MAX      = 100;
+  /// <summary>The pseudo-property <c>get</c> answers with every assigned event of a component and its handler.</summary>
+  EVENTS_PSEUDO_PROP = '@events';
   /// <summary>How long a dialog click waits for its window to go before reporting what came of it (GxInspect's measured 1.5 s).</summary>
   DISMISS_WAIT_MS   = 1500;
   /// <summary>Polling step while waiting for a clicked dialog to close.</summary>
@@ -1369,6 +1371,144 @@ begin
 
 end;
 
+type
+  /// <summary>What an event property is assigned to, resolved to the names a reader would search the source for.</summary>
+  THandlerInfo = record
+    /// <summary>True when the event has a handler (its code pointer is set).</summary>
+    Assigned: Boolean;
+    /// <summary>The class of the object the handler runs on (<c>TfrmMain</c>), or empty when it has none.</summary>
+    HandlerClass: string;
+    /// <summary>The handler's name (<c>btnSaveClick</c>), or empty when it is not a published method (assigned in code to a private one).</summary>
+    MethodName: string;
+    /// <summary>The unit that declares <c>HandlerClass</c>, or empty when it has no class.</summary>
+    UnitName: string;
+    /// <summary>The handler as one string: <c>TfrmMain.btnSaveClick</c>, <c>TfrmMain.&lt;unpublished method&gt;</c>, or <c>&lt;procedure at $…&gt;</c>.</summary>
+    Display: string;
+  end;
+
+/// <summary>Whether a pointer looks like a live object: its first field is a VMT whose self-pointer slot points back at it.</summary>
+/// <param name="APtr">The pointer, never nil.</param>
+/// <returns>True when it can be cast to <c>TObject</c> and asked its class.</returns>
+/// <remarks>
+///   An event's data pointer is normally the handler's object, but a hand-built <c>TMethod</c> can carry a record,
+///   an interface or a thunk, and a handler whose object was freed leaves a dangling one.  Treating either as an
+///   object would read through a wild VMT.
+/// </remarks>
+function LooksLikeObject( APtr: Pointer ): Boolean;
+begin
+
+  try
+    var pVmt        := PPointer( APtr )^;
+    Result          := ( pVmt <> nil ) and ( PPointer( PByte( pVmt ) + vmtSelfPtr )^ = pVmt );
+  except
+    // JUSTIFIED: the pointer belongs to the inspected app's state, not to us, and an unreadable one is exactly
+    // what this probe exists to detect - it is reported as "not an object", never as our failure.
+    on E: EAccessViolation do
+      Result        := False;
+  end;
+
+end;
+
+/// <summary>Resolves the handler an event property is assigned to.</summary>
+/// <param name="AObj">The instance that has the event.</param>
+/// <param name="AProp">The event property (<c>tkMethod</c>).</param>
+/// <returns>The handler's names; <c>Assigned</c> is False when the event is unassigned.</returns>
+/// <remarks>
+///   The name comes from the method table of the handler's object, which lists published methods only: a
+///   form's designer-wired handlers are published, a method assigned in code from a private section is not,
+///   and that one is reported with its class but no name.  A named handler is reported against the class that
+///   DECLARES it, walking up while the parent has the same method at the same address, so a handler inherited
+///   from a base form names the base form and its unit, where the source is.  A data pointer that is not an
+///   object reads <c>&lt;handler at $…&gt;</c> with no names.
+/// </remarks>
+function HandlerInfo( AObj: TObject; AProp: PPropInfo ): THandlerInfo;
+begin
+
+  Result            := Default( THandlerInfo );
+  var rMethod       := GetMethodProp( AObj, AProp );
+  if rMethod.Code = nil then Exit;
+
+  Result.Assigned   := True;
+  if rMethod.Data = nil then
+  begin
+    Result.Display  := Format( '<procedure at $%p>', [ rMethod.Code ] );
+    Exit;
+  end;
+
+  if not LooksLikeObject( rMethod.Data ) then
+  begin
+    Result.Display  := Format( '<handler at $%p>', [ rMethod.Code ] );
+    Exit;
+  end;
+
+  var cDecl         := TObject( rMethod.Data ).ClassType;
+  Result.MethodName := cDecl.MethodName( rMethod.Code );
+  if Result.MethodName <> '' then
+    while ( cDecl.ClassParent <> nil ) and ( cDecl.ClassParent.MethodAddress( Result.MethodName ) = rMethod.Code ) do
+      cDecl         := cDecl.ClassParent;
+
+  Result.HandlerClass := cDecl.ClassName;
+  Result.UnitName   := cDecl.UnitName;
+  if Result.MethodName <> '' then
+    Result.Display  := Result.HandlerClass + '.' + Result.MethodName
+  else
+    Result.Display  := Result.HandlerClass + '.<unpublished method>';
+
+end;
+
+/// <summary>Builds the <c>handler</c> object of a <c>get</c> reply: <c>{ class, method, unit }</c>, a name that cannot be resolved being null.</summary>
+/// <param name="AInfo">The resolved handler; must be assigned.</param>
+/// <returns>A new object.</returns>
+function HandlerJSON( const AInfo: THandlerInfo ): TJSONObject;
+
+  /// <summary>A name as a JSON string, or JSON null when it could not be resolved.</summary>
+  /// <param name="AName">The name; empty when unresolved.</param>
+  /// <returns>A new JSON value.</returns>
+  function NameOrNull( const AName: string ): TJSONValue;
+  begin
+    if AName = '' then Result := TJSONNull.Create else Result := TJSONString.Create( AName );
+  end;
+
+begin
+
+  Result            := TJSONObject.Create;
+  Result.AddPair( 'class', NameOrNull( AInfo.HandlerClass ) );
+  Result.AddPair( 'method', NameOrNull( AInfo.MethodName ) );
+  Result.AddPair( 'unit', NameOrNull( AInfo.UnitName ) );
+
+end;
+
+/// <summary>Lists an object's assigned published events as <c>{ OnClick: "TfrmMain.btnSaveClick", … }</c>; unassigned ones are left out.</summary>
+/// <param name="AObj">The component or form.</param>
+/// <returns>A new object, empty when no event is assigned.</returns>
+function EventsJSON( AObj: TObject ): TJSONObject;
+begin
+
+  Result            := TJSONObject.Create;
+  try
+    var iCount      := GetPropList( AObj.ClassInfo, [ tkMethod ], nil );
+    if iCount = 0 then Exit;
+
+    var pList: PPropList;
+    GetMem( pList, iCount * SizeOf( PPropInfo ) );
+    try
+      GetPropList( AObj.ClassInfo, [ tkMethod ], pList );
+      for var i := 0 to iCount - 1 do
+      begin
+        var rInfo   := HandlerInfo( AObj, pList^[ i ] );
+        if rInfo.Assigned then
+          Result.AddPair( string( pList^[ i ]^.Name ), rInfo.Display );
+      end;
+    finally
+      FreeMem( pList );
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
+
+end;
+
 /// <summary>
 ///   Enumerates an object's published properties as
 ///   <c>{ properties:[ { name, type, value? } ], total, truncated }</c> — the payload
@@ -1382,7 +1522,9 @@ end;
 ///   Only properties <c>get</c>/<c>set</c> can act on are listed. Scalar ones carry their
 ///   value, read under its own guard since a getter may raise. Assigned object-typed ones
 ///   (<c>Font</c>, <c>Lines</c>) carry <c>nested:true</c> and no value: a dotted path reaches
-///   into them. Events, interface and array properties are left out.
+///   into them. Assigned events (read view only) follow every property, carrying their handler
+///   as the value, <c>TfrmMain.btnSaveClick</c>; unassigned events, interface and array
+///   properties are left out.
 /// </remarks>
 function PropsJSON( AObj: TObject; AWritableOnly: Boolean ): TJSONObject;
 const
@@ -1417,9 +1559,8 @@ begin
         Continue;
       end;
 
-      // Otherwise list only what get/set can act on as a scalar. Events, interface and array
-      // properties are neither readable as a value nor writable through SetPropValue - listing
-      // them is pure noise in a payload the caller pays for by the token.
+      // Otherwise list only what get/set can act on as a scalar. Events come in a second pass below;
+      // interface and array properties are neither readable as a value nor writable through SetPropValue.
       if pProp^.PropType^.Kind not in VALUE_KINDS then Continue;
       if pProp^.GetProc = nil then Continue;
       if AWritableOnly and ( pProp^.SetProc = nil ) then Continue;
@@ -1441,6 +1582,25 @@ begin
 
       oProps.AddElement( oEntry );
     end;
+
+    // ASSIGNED events, with their handler's name, in the read view only (get reads them, set cannot write
+    // them), and AFTER every property: they must never push a property past PROPLIST_MAX.  Unassigned events
+    // are left out - most of a control's events, and pure noise in a payload the caller pays for by the token.
+    if not AWritableOnly then
+      for var i := 0 to iCount - 1 do
+      begin
+        var pProp   := pList^[ i ];
+        if pProp^.PropType^.Kind <> tkMethod then Continue;
+        var rInfo   := HandlerInfo( AObj, pProp );
+        if not rInfo.Assigned then Continue;
+        Inc( iTotal );
+        if oProps.Count >= PROPLIST_MAX then Continue;
+        var oEvent  := TJSONObject.Create;
+        oEvent.AddPair( 'name', string( pProp^.Name ) );
+        oEvent.AddPair( 'type', string( pProp^.PropType^.Name ) );
+        oEvent.AddPair( 'value', rInfo.Display );
+        oProps.AddElement( oEvent );
+      end;
   finally
     if iCount > 0 then FreeMem( pList );
   end;
@@ -1480,7 +1640,11 @@ type
     /// <summary>A <c>TStrings</c> object's <c>Count</c> (read-only).</summary>
     paStringsCount,
     /// <summary>A control's window text through <c>GetTextBuf</c> / <c>SetTextBuf</c>: <c>Text</c> or <c>Caption</c> where the class does not publish it (<c>TMemo.Text</c>).</summary>
-    paControlText );
+    paControlText,
+    /// <summary>A published event (<c>OnClick</c>): reads as its handler's name, read-only.</summary>
+    paEvent,
+    /// <summary>The pseudo-property <c>@events</c>: every assigned event of the component, read-only.</summary>
+    paEvents );
 
   /// <summary>A property path resolved to the object that holds the final property, and how to reach it.</summary>
   TPropTarget = record
@@ -1497,7 +1661,8 @@ type
 ///   properties - <c>Font.Size</c>, <c>Margins.Left</c>, <c>Lines.Text</c>. A <c>TStrings</c>
 ///   reads and writes as its text, whether named on its own (<c>Lines</c>) or as <c>Lines.Text</c>;
 ///   <c>Lines.Count</c> reads its count. <c>Text</c> / <c>Caption</c> on a control that does not
-///   publish them fall back to its window text, so <c>TMemo.Text</c> is reachable.
+///   publish them fall back to its window text, so <c>TMemo.Text</c> is reachable.  A published event
+///   (<c>OnClick</c>) and the pseudo-property <c>@events</c> resolve read-only.
 /// </summary>
 /// <param name="AComp">The component the path starts from.</param>
 /// <param name="APath">The property path.</param>
@@ -1511,6 +1676,14 @@ type
 /// </remarks>
 function ResolvePropPath( AComp: TComponent; const APath: string; AWriting: Boolean ): TPropTarget;
 begin
+
+  if SameText( APath, EVENTS_PSEUDO_PROP ) then
+  begin
+    Result.Obj      := AComp;
+    Result.Prop     := APath;
+    Result.Access   := paEvents;
+    Exit;
+  end;
 
   var aSteps        := APath.Split( [ '.' ] );
   if ( Length( aSteps ) = 0 ) or ( APath = '' ) then
@@ -1552,6 +1725,11 @@ begin
 
   if IsPublishedProp( oObj, sLast ) then
   begin
+    if PropType( oObj, sLast ) = tkMethod then
+    begin
+      Result.Access := paEvent;
+      Exit;
+    end;
     if PropType( oObj, sLast ) <> tkClass then Exit;
 
     var oValue      := GetObjectProp( oObj, sLast );
@@ -1597,6 +1775,20 @@ begin
       SetLength( sBuf, oCtl.GetTextBuf( PChar( sBuf ), Length( sBuf ) ) );
       Result        := sBuf;
     end;
+    paEvent:
+    begin
+      var rInfo     := HandlerInfo( ATarget.Obj, GetPropInfo( ATarget.Obj, ATarget.Prop ) );
+      if rInfo.Assigned then Result := rInfo.Display else Result := Null;
+    end;
+    paEvents:
+    begin
+      var oEvents   := EventsJSON( ATarget.Obj ); // the whole list as JSON text: get returns it as an object instead
+      try
+        Result      := oEvents.ToJSON;
+      finally
+        oEvents.Free;
+      end;
+    end;
   else
     Result          := GetPropValue( ATarget.Obj, ATarget.Prop );
   end;
@@ -1617,6 +1809,8 @@ begin
       raise EAutoError.CreateCode( 'ReadOnlyProp', 'a string list''s Count is read-only - write its Text' );
     paControlText:
       TControl( ATarget.Obj ).SetTextBuf( PChar( VarToStr( AValue ) ) );
+    paEvent, paEvents:
+      raise EAutoError.CreateCode( 'ReadOnlyProp', Format( '%s is an event: get reads its handler, set cannot assign one', [ ATarget.Prop ] ) );
   else
     SetPropValue( ATarget.Obj, ATarget.Prop, AValue );
   end;
@@ -1625,7 +1819,11 @@ end;
 
 /// <summary><c>get</c> command: reads one property of a component (or the form) - a published property, or a dotted path through object-typed ones (<c>Font.Size</c>, <c>Lines</c>).</summary>
 /// <param name="AReq">The request object (<c>form?</c>, <c>name?</c>, <c>prop</c>).</param>
-/// <returns><c>{ name, prop, value }</c>.</returns>
+/// <returns>
+///   <c>{ name, prop, value }</c>.  An event (<c>OnClick</c>) reads as its handler, <c>TfrmMain.btnSaveClick</c>, with
+///   <c>handler:{ class, method, unit }</c> beside it, or <c>value:null</c> when unassigned; <c>@events</c> reads as an
+///   object of every assigned event.
+/// </returns>
 /// <remarks>Raises <c>EAutoError</c> - the codes of <c>ResolvePropPath</c>; <c>NoProp</c> carries the property surface in <c>error.data</c>.</remarks>
 function AutoCmdGet( AReq: TJSONObject ): TJSONValue;
 begin
@@ -1636,9 +1834,31 @@ begin
   var rTarget       := ResolvePropPath( oComp, sProp, False );
 
   Result            := TJSONObject.Create;
-  TJSONObject( Result ).AddPair( 'name', oComp.Name );
-  TJSONObject( Result ).AddPair( 'prop', sProp );
-  TJSONObject( Result ).AddPair( 'value', VarToJSON( ReadPropTarget( rTarget ) ) );
+  try
+    TJSONObject( Result ).AddPair( 'name', oComp.Name );
+    TJSONObject( Result ).AddPair( 'prop', sProp );
+
+    case rTarget.Access of
+      paEvents:
+        TJSONObject( Result ).AddPair( 'value', EventsJSON( rTarget.Obj ) );
+      paEvent:
+      begin
+        var rInfo   := HandlerInfo( rTarget.Obj, GetPropInfo( rTarget.Obj, rTarget.Prop ) );
+        if rInfo.Assigned then
+        begin
+          TJSONObject( Result ).AddPair( 'value', rInfo.Display );
+          TJSONObject( Result ).AddPair( 'handler', HandlerJSON( rInfo ) );
+        end
+        else
+          TJSONObject( Result ).AddPair( 'value', TJSONNull.Create );
+      end;
+    else
+      TJSONObject( Result ).AddPair( 'value', VarToJSON( ReadPropTarget( rTarget ) ) );
+    end;
+  except
+    Result.Free;
+    raise;
+  end;
 
 end;
 
