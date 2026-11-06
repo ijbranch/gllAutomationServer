@@ -93,6 +93,13 @@ type
     /// </summary>
     [Test]
     procedure PidOwnsLocalPort_SecondListener_IsUntrusted;
+    /// <summary>
+    ///   Proves which TCP table rows count as listeners: <c>LISTEN</c> ( 2 ) always, state 0 ( what Windows build 26300
+    ///   reports for a new listener since the 2026-11-05 updates ) only with no remote end, and a connected or other-state
+    ///   row never.  Before the fix only state 2 counted, so no app could be discovered.
+    /// </summary>
+    [Test]
+    procedure RowIsListener_ListenOrStateZeroWithoutRemote;
     /// <summary>Proves a server error arrives as <c>EAutomationCommandError</c> carrying the server's own code, here <c>NoComp</c>.</summary>
     [Test]
     procedure CommandError_CarriesTheServerCode;
@@ -653,6 +660,23 @@ begin
     Listener( OTHER_PID, OTHER_LOOPBACK ) ], APP_PID ), 'a listener no connection to 127.0.0.1 can reach made the port untrusted' );
   Assert.IsFalse( TAutomationDiscovery.ListenersTrust( [ Listener( APP_PID, 0 ) ], APP_PID ), 'the app on the wildcard address only' );
   Assert.IsFalse( TAutomationDiscovery.ListenersTrust( [], APP_PID ), 'no listener at all' );
+
+end;
+
+procedure TTestGllAutomationClient.RowIsListener_ListenOrStateZeroWithoutRemote;
+const
+  STATE_ESTABLISHED = 5;
+  REMOTE_ADDR       = $0100007F; // 127.0.0.1
+  REMOTE_PORT       = $5000;
+begin
+
+  Assert.IsTrue( TAutomationDiscovery.RowIsListener( 2, 0, 0 ), 'LISTEN' );
+  Assert.IsTrue( TAutomationDiscovery.RowIsListener( 0, 0, 0 ), 'state 0 with no remote end ( build 26300 )' );
+  Assert.IsFalse( TAutomationDiscovery.RowIsListener( 0, REMOTE_ADDR, REMOTE_PORT ), 'state 0 with a remote end' );
+  Assert.IsFalse( TAutomationDiscovery.RowIsListener( 0, 0, REMOTE_PORT ), 'state 0 with a remote port' );
+  Assert.IsFalse( TAutomationDiscovery.RowIsListener( 0, REMOTE_ADDR, 0 ), 'state 0 with a remote address' );
+  Assert.IsFalse( TAutomationDiscovery.RowIsListener( STATE_ESTABLISHED, 0, 0 ), 'another defined state' );
+  Assert.IsFalse( TAutomationDiscovery.RowIsListener( STATE_ESTABLISHED, REMOTE_ADDR, REMOTE_PORT ), 'a connection' );
 
 end;
 

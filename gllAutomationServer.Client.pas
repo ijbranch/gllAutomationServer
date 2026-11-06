@@ -131,6 +131,19 @@ type
     /// <param name="APid">The advertised process.</param>
     /// <returns>True when the port may be trusted.</returns>
     class function ListenersTrust( const AListeners: TArray<TAutomationListener>; APid: Cardinal ): Boolean; static;
+    /// <summary>
+    ///   True when a TCP table row is a listening socket: its state is <c>MIB_TCP_STATE_LISTEN</c>, or it is 0 and the
+    ///   row has no remote end.  State 0 is not a defined <c>MIB_TCP_STATE</c>, but since the Windows updates of
+    ///   2026-11-05 ( build 26300 ) every newly opened listener reports it, so a check on <c>LISTEN</c> alone found no
+    ///   listener and trusted nothing.  A listening socket never has a remote end, so the rule cannot take a connected
+    ///   socket for one; counting more rows as listeners only makes <c>ListenersTrust</c> stricter.  Remove the state-0
+    ///   case once Windows reports <c>LISTEN</c> again.
+    /// </summary>
+    /// <param name="AState">The row's <c>dwState</c>.</param>
+    /// <param name="ARemoteAddr">The row's <c>dwRemoteAddr</c>.</param>
+    /// <param name="ARemotePort">The row's <c>dwRemotePort</c>.</param>
+    /// <returns>True when the row is a listener.</returns>
+    class function RowIsListener( AState, ARemoteAddr, ARemotePort: Cardinal ): Boolean; static;
     /// <summary>True when the process runs as the same user as this one; one that cannot be read is not.</summary>
     /// <param name="APid">The process ID.</param>
     /// <returns>True when the token user SIDs match.</returns>
@@ -521,7 +534,7 @@ begin
     begin
       var pRow      := PMibTcpRowOwnerPid( NativeUInt( @pTable^.table[ 0 ] ) + NativeUInt( iRow ) * SizeOf( TMibTcpRowOwnerPid ) );
       var iPort     := ( ( pRow^.dwLocalPort and $FF ) shl 8 ) or ( ( pRow^.dwLocalPort shr 8 ) and $FF );
-      if ( iPort <> APort ) or ( pRow^.dwState <> MIB_TCP_STATE_LISTEN ) then
+      if ( iPort <> APort ) or not RowIsListener( pRow^.dwState, pRow^.dwRemoteAddr, pRow^.dwRemotePort ) then
         Continue;
       var rListener: TAutomationListener;
       rListener.Pid := pRow^.dwOwningPid;
@@ -546,6 +559,14 @@ begin
       Result        := True
     else if ( rListener.Addr = AUTOMATION_LOOPBACK_ADDR ) or ( rListener.Addr = 0 ) then
       Exit( False );
+
+end;
+
+class function TAutomationDiscovery.RowIsListener( AState, ARemoteAddr, ARemotePort: Cardinal ): Boolean;
+begin
+
+  Result            := ( AState = MIB_TCP_STATE_LISTEN ) or
+    ( ( AState = 0 ) and ( ARemoteAddr = 0 ) and ( ARemotePort = 0 ) );
 
 end;
 
