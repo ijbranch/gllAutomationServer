@@ -78,6 +78,9 @@ type
     Addr: Cardinal;
   end;
 
+  /// <summary>An IPv6 address as the TCP table holds it: 16 bytes in network order.</summary>
+  TAutomationIpv6Address = array[ 0..15 ] of Byte;
+
   /// <summary>Decides whether a live, port-owning advertisement may be sent the token.</summary>
   /// <param name="APid">The advertised process.</param>
   /// <param name="AApp">The advertised app name.</param>
@@ -115,8 +118,10 @@ type
     class function IsPidAlive( APid: Cardinal ): Boolean; static;
     /// <summary>
     ///   True when a LISTENING IPv4 socket on <c>127.0.0.1:APort</c> belongs to exactly <c>APid</c> and no
-    ///   other process listens on that port on loopback or any address.  A discovery file is honoured only
-    ///   when it does, so a planted file cannot steer the token to another listener.
+    ///   other socket listens on that port where a connection to 127.0.0.1 could reach it: on IPv4 loopback or any
+    ///   address, or on an IPv6 address that takes IPv4 ( <c>Ipv6ListenerReachesLoopback</c> ).  A discovery file is
+    ///   honoured only when it does, so a planted file cannot steer the token to another listener.  Either TCP table
+    ///   failing to read makes the port untrusted.
     /// </summary>
     /// <param name="APid">The advertised process.</param>
     /// <param name="APort">The advertised port.</param>
@@ -144,6 +149,27 @@ type
     /// <param name="ARemotePort">The row's <c>dwRemotePort</c>.</param>
     /// <returns>True when the row is a listener.</returns>
     class function RowIsListener( AState, ARemoteAddr, ARemotePort: Cardinal ): Boolean; static;
+    /// <summary>
+    ///   True when an IPv6 listener bound to this address could take an IPv4 connection to 127.0.0.1: the unspecified
+    ///   address <c>::</c> ( a dual-stack socket accepts IPv4 on every address; the table does not say whether
+    ///   <c>IPV6_V6ONLY</c> is set, so it is assumed off ), or the IPv4-mapped <c>::ffff:127.0.0.1</c> or
+    ///   <c>::ffff:0.0.0.0</c>.  <c>::1</c> and every other address cannot.  <c>PidOwnsLocalPort</c> counts such a
+    ///   listener as one on the wildcard address, so it makes the port untrusted whoever owns it.
+    /// </summary>
+    /// <param name="AAddress">The listener's local address.</param>
+    /// <returns>True when a connection to 127.0.0.1 could reach it.</returns>
+    class function Ipv6ListenerReachesLoopback( const AAddress: TAutomationIpv6Address ): Boolean; static;
+    /// <summary>
+    ///   The listeners on a port in raw TCP tables, as <c>ListenersTrust</c> takes them: every IPv4 listening row on the
+    ///   port with its own address, and every IPv6 one that <c>Ipv6ListenerReachesLoopback</c> passes as a wildcard
+    ///   ( Addr 0 ) listener.  Pure, so the parsing is testable on synthetic tables; a count larger than the buffer is
+    ///   capped at the rows it can hold.
+    /// </summary>
+    /// <param name="ATable4">A <c>MIB_TCPTABLE_OWNER_PID</c>: a <c>DWORD</c> count, then 24-byte rows; empty for none.</param>
+    /// <param name="ATable6">A <c>MIB_TCP6TABLE_OWNER_PID</c>: a <c>DWORD</c> count, then 56-byte rows; empty for none.</param>
+    /// <param name="APort">The port, host order.</param>
+    /// <returns>The listeners that matter to <c>ListenersTrust</c>.</returns>
+    class function ListenersOnPort( const ATable4, ATable6: TBytes; APort: Word ): TArray<TAutomationListener>; static;
     /// <summary>True when the process runs as the same user as this one; one that cannot be read is not.</summary>
     /// <param name="APid">The process ID.</param>
     /// <returns>True when the token user SIDs match.</returns>
@@ -354,6 +380,8 @@ uses
 const
   /// <summary><c>GetExtendedTcpTable</c>'s address family for IPv4.</summary>
   AF_INET_IPV4              = 2;
+  /// <summary><c>GetExtendedTcpTable</c>'s address family for IPv6.</summary>
+  AF_INET_IPV6              = 23;
   /// <summary><c>GetExtendedTcpTable</c>'s table class: every TCP endpoint, with its owning PID.</summary>
   TCP_TABLE_OWNER_PID_ALL   = 5;
   /// <summary>The <c>MIB_TCP_STATE</c> of a listening socket.</summary>
@@ -387,6 +415,20 @@ type
   end;
   /// <summary>Pointer to a <c>TMibTcpTableOwnerPid</c>.</summary>
   PMibTcpTableOwnerPid = ^TMibTcpTableOwnerPid;
+
+  /// <summary>One row of <c>MIB_TCP6TABLE_OWNER_PID</c>.</summary>
+  TMibTcp6RowOwnerPid = record
+    ucLocalAddr     : TAutomationIpv6Address;
+    dwLocalScopeId  : DWORD;
+    dwLocalPort     : DWORD;
+    ucRemoteAddr    : TAutomationIpv6Address;
+    dwRemoteScopeId : DWORD;
+    dwRemotePort    : DWORD;
+    dwState         : DWORD;
+    dwOwningPid     : DWORD;
+  end;
+  /// <summary>Pointer to a <c>TMibTcp6RowOwnerPid</c>.</summary>
+  PMibTcp6RowOwnerPid = ^TMibTcp6RowOwnerPid;
 
 function GetExtendedTcpTable( pTcpTable: Pointer; var pdwSize: DWORD; bOrder: BOOL; ulAf: ULONG; TableClass: Integer;
   Reserved: ULONG ): DWORD; stdcall; external 'iphlpapi.dll';
@@ -503,48 +545,137 @@ begin
 
 end;
 
+/// <summary>Reads one whole TCP table with owning PIDs, retrying while it grows between the size probe and the fill.</summary>
+/// <param name="AFamily"><c>AF_INET_IPV4</c> or <c>AF_INET_IPV6</c>.</param>
+/// <param name="ARowSize">The size of one row, to check the count against the buffer.</param>
+/// <param name="ATable">The table: a <c>DWORD</c> row count, then the rows.</param>
+/// <param name="AError">The Windows error when the read failed, else <c>NO_ERROR</c>.</param>
+/// <returns>True when the table was read and holds as many rows as it says.</returns>
+function ReadTcpTable( AFamily: ULONG; ARowSize: Integer; out ATable: TBytes; out AError: DWORD ): Boolean;
+begin
+
+  Result            := False;
+  ATable            := nil;
+  AError            := ERROR_INSUFFICIENT_BUFFER;
+  for var iAttempt := 1 to 5 do
+  begin
+    var dwSize: DWORD := 0;
+    AError          := GetExtendedTcpTable( nil, dwSize, False, AFamily, TCP_TABLE_OWNER_PID_ALL, 0 );
+    if dwSize < SizeOf( DWORD ) then
+    begin
+      if AError = NO_ERROR then
+        AError      := ERROR_INVALID_DATA;
+      Exit;
+    end;
+    SetLength( ATable, dwSize );
+    AError          := GetExtendedTcpTable( @ATable[ 0 ], dwSize, False, AFamily, TCP_TABLE_OWNER_PID_ALL, 0 );
+    if AError = NO_ERROR then
+    begin
+      var iCount    := Int64( PDWORD( @ATable[ 0 ] )^ );
+      Result        := SizeOf( DWORD ) + iCount * ARowSize <= Int64( dwSize );
+      if not Result then
+        AError      := ERROR_INVALID_DATA;
+      Exit;
+    end;
+    if AError <> ERROR_INSUFFICIENT_BUFFER then
+      Exit;
+  end;
+
+end;
+
+/// <summary>A TCP table's port field ( network order in its low word ) as a host-order port.</summary>
+/// <param name="APortField">The row's port field.</param>
+/// <returns>The port.</returns>
+function TablePort( APortField: DWORD ): Integer;
+begin
+  Result            := ( ( APortField and $FF ) shl 8 ) or ( ( APortField shr 8 ) and $FF );
+end;
+
+/// <summary>The number of rows a table says it holds, or 0 for an empty or too-short buffer.</summary>
+/// <param name="ATable">The table bytes.</param>
+/// <param name="ARowSize">The size of one row.</param>
+/// <returns>The row count, capped at what the buffer can hold.</returns>
+function TableRowCount( const ATable: TBytes; ARowSize: Integer ): Integer;
+begin
+
+  Result            := 0;
+  if Length( ATable ) < SizeOf( DWORD ) then
+    Exit;
+  var iFits         := ( Length( ATable ) - SizeOf( DWORD ) ) div ARowSize;
+  Result            := Integer( Min( Int64( PDWORD( @ATable[ 0 ] )^ ), Int64( iFits ) ) );
+
+end;
+
+class function TAutomationDiscovery.ListenersOnPort( const ATable4, ATable6: TBytes; APort: Word ): TArray<TAutomationListener>;
+begin
+
+  Result            := [];
+  for var iRow := 0 to TableRowCount( ATable4, SizeOf( TMibTcpRowOwnerPid ) ) - 1 do
+  begin
+    var pRow        := PMibTcpRowOwnerPid( @ATable4[ SizeOf( DWORD ) + iRow * SizeOf( TMibTcpRowOwnerPid ) ] );
+    if ( TablePort( pRow^.dwLocalPort ) <> APort ) or
+      not RowIsListener( pRow^.dwState, pRow^.dwRemoteAddr, pRow^.dwRemotePort ) then
+      Continue;
+    var rListener: TAutomationListener;
+    rListener.Pid   := pRow^.dwOwningPid;
+    rListener.Addr  := pRow^.dwLocalAddr;
+    Result          := Result + [ rListener ];
+  end;
+
+  //  an IPv6 listener that a connection to 127.0.0.1 could reach counts as one on the IPv4 wildcard address
+  for var iRow := 0 to TableRowCount( ATable6, SizeOf( TMibTcp6RowOwnerPid ) ) - 1 do
+  begin
+    var pRow6       := PMibTcp6RowOwnerPid( @ATable6[ SizeOf( DWORD ) + iRow * SizeOf( TMibTcp6RowOwnerPid ) ] );
+    var bNoRemote   := True;
+    for var b in pRow6^.ucRemoteAddr do
+      if b <> 0 then
+        bNoRemote   := False;
+    if ( TablePort( pRow6^.dwLocalPort ) <> APort ) or
+      not RowIsListener( pRow6^.dwState, Ord( not bNoRemote ), pRow6^.dwRemotePort ) or
+      not Ipv6ListenerReachesLoopback( pRow6^.ucLocalAddr ) then
+      Continue;
+    var rListener: TAutomationListener;
+    rListener.Pid   := pRow6^.dwOwningPid;
+    rListener.Addr  := 0;
+    Result          := Result + [ rListener ];
+  end;
+
+end;
+
 class function TAutomationDiscovery.PidOwnsLocalPort( APid: Cardinal; APort: Word ): Boolean;
+var
+  aTable4, aTable6: TBytes;
+  dwError: DWORD;
 begin
 
   Result            := False;
   if ( APid = 0 ) or ( APort = 0 ) then
     Exit;
-
-  //  two calls with a bounded retry: the table can grow between the size probe and the fill
-  var pTable: PMibTcpTableOwnerPid;
-  var iAttempt      := 0;
-  repeat
-    Inc( iAttempt );
-    var dwSize: DWORD := 0;
-    GetExtendedTcpTable( nil, dwSize, False, AF_INET_IPV4, TCP_TABLE_OWNER_PID_ALL, 0 );
-    if dwSize = 0 then
+  if not ReadTcpTable( AF_INET_IPV4, SizeOf( TMibTcpRowOwnerPid ), aTable4, dwError ) then
+    Exit; // unreadable: treat as untrusted
+  if not ReadTcpTable( AF_INET_IPV6, SizeOf( TMibTcp6RowOwnerPid ), aTable6, dwError ) then
+  begin
+    //  with no IPv6 stack nothing can listen on IPv6, so there is nothing to see; any other failure is untrusted
+    if ( dwError <> ERROR_NOT_SUPPORTED ) and ( dwError <> ERROR_INVALID_PARAMETER ) then
       Exit;
-    GetMem( pTable, dwSize );
-    var dwRet       := GetExtendedTcpTable( pTable, dwSize, False, AF_INET_IPV4, TCP_TABLE_OWNER_PID_ALL, 0 );
-    if dwRet = NO_ERROR then
-      Break;
-    FreeMem( pTable );
-    if ( dwRet <> ERROR_INSUFFICIENT_BUFFER ) or ( iAttempt = 5 ) then
-      Exit; // retries exhausted: treat as untrusted
-  until False;
-
-  var aListeners: TArray<TAutomationListener> := [];
-  try
-    for var iRow := 0 to Integer( pTable^.dwNumEntries ) - 1 do
-    begin
-      var pRow      := PMibTcpRowOwnerPid( NativeUInt( @pTable^.table[ 0 ] ) + NativeUInt( iRow ) * SizeOf( TMibTcpRowOwnerPid ) );
-      var iPort     := ( ( pRow^.dwLocalPort and $FF ) shl 8 ) or ( ( pRow^.dwLocalPort shr 8 ) and $FF );
-      if ( iPort <> APort ) or not RowIsListener( pRow^.dwState, pRow^.dwRemoteAddr, pRow^.dwRemotePort ) then
-        Continue;
-      var rListener: TAutomationListener;
-      rListener.Pid := pRow^.dwOwningPid;
-      rListener.Addr := pRow^.dwLocalAddr;
-      aListeners    := aListeners + [ rListener ];
-    end;
-  finally
-    FreeMem( pTable );
+    aTable6         := nil;
   end;
-  Result            := ListenersTrust( aListeners, APid );
+  Result            := ListenersTrust( ListenersOnPort( aTable4, aTable6, APort ), APid );
+
+end;
+
+class function TAutomationDiscovery.Ipv6ListenerReachesLoopback( const AAddress: TAutomationIpv6Address ): Boolean;
+begin
+
+  // :: , or ::ffff:a.b.c.d with the first ten bytes zero
+  for var i := 0 to 9 do
+    if AAddress[ i ] <> 0 then
+      Exit( False );
+  var bMapped       := ( AAddress[ 10 ] = $FF ) and ( AAddress[ 11 ] = $FF );
+  var bTailZero     := ( AAddress[ 12 ] = 0 ) and ( AAddress[ 13 ] = 0 ) and ( AAddress[ 14 ] = 0 ) and ( AAddress[ 15 ] = 0 );
+  var bTailLoopback := ( AAddress[ 12 ] = 127 ) and ( AAddress[ 13 ] = 0 ) and ( AAddress[ 14 ] = 0 ) and ( AAddress[ 15 ] = 1 );
+  Result            := ( ( AAddress[ 10 ] = 0 ) and ( AAddress[ 11 ] = 0 ) and bTailZero ) or
+    ( bMapped and ( bTailZero or bTailLoopback ) );
 
 end;
 

@@ -100,6 +100,22 @@ type
     /// </summary>
     [Test]
     procedure RowIsListener_ListenOrStateZeroWithoutRemote;
+    /// <summary>
+    ///   Proves which IPv6 listener addresses count as reachable from a connection to 127.0.0.1, and so make the port
+    ///   untrusted: <c>::</c> ( dual-stack ), <c>::ffff:127.0.0.1</c> and <c>::ffff:0.0.0.0</c> do; <c>::1</c>,
+    ///   <c>::ffff:127.0.0.2</c>, <c>::ffff:10.0.0.1</c> and a global address do not.  Before the change the IPv6 table
+    ///   was never read, so a dual-stack listener on the app's port went unseen.
+    /// </summary>
+    [Test]
+    procedure Ipv6ListenerReachesLoopback_UnspecifiedAndMappedOnly;
+    /// <summary>
+    ///   Proves the table parsing on synthetic tables: an IPv4 listener keeps its address; an IPv6 listener on <c>::</c>
+    ///   on the port becomes a wildcard ( Addr 0 ) listener, so the app's port is untrusted, while one on <c>::1</c>, one
+    ///   with a remote end, and one on another port are left out ( the port stays trusted ); and a row count larger than
+    ///   the buffer is capped instead of read past.  Fails if the IPv6 rows were not read at all.
+    /// </summary>
+    [Test]
+    procedure ListenersOnPort_ReadsBothTables;
     /// <summary>Proves a server error arrives as <c>EAutomationCommandError</c> carrying the server's own code, here <c>NoComp</c>.</summary>
     [Test]
     procedure CommandError_CarriesTheServerCode;
@@ -677,6 +693,137 @@ begin
   Assert.IsFalse( TAutomationDiscovery.RowIsListener( 0, REMOTE_ADDR, 0 ), 'state 0 with a remote address' );
   Assert.IsFalse( TAutomationDiscovery.RowIsListener( STATE_ESTABLISHED, 0, 0 ), 'another defined state' );
   Assert.IsFalse( TAutomationDiscovery.RowIsListener( STATE_ESTABLISHED, REMOTE_ADDR, REMOTE_PORT ), 'a connection' );
+
+end;
+
+/// <summary>An IPv6 address from its sixteen bytes.</summary>
+/// <param name="ABytes">The bytes, network order.</param>
+/// <returns>The address.</returns>
+function Ipv6( const ABytes: array of Byte ): TAutomationIpv6Address;
+begin
+
+  FillChar( Result, SizeOf( Result ), 0 );
+  for var i := 0 to High( ABytes ) do
+    Result[ i ]     := ABytes[ i ];
+
+end;
+
+procedure TTestGllAutomationClient.Ipv6ListenerReachesLoopback_UnspecifiedAndMappedOnly;
+begin
+
+  Assert.IsTrue( TAutomationDiscovery.Ipv6ListenerReachesLoopback( Ipv6( [] ) ), ':: ( dual-stack )' );
+  Assert.IsTrue( TAutomationDiscovery.Ipv6ListenerReachesLoopback(
+    Ipv6( [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, $FF, $FF, 127, 0, 0, 1 ] ) ), '::ffff:127.0.0.1' );
+  Assert.IsTrue( TAutomationDiscovery.Ipv6ListenerReachesLoopback(
+    Ipv6( [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, $FF, $FF, 0, 0, 0, 0 ] ) ), '::ffff:0.0.0.0' );
+  Assert.IsFalse( TAutomationDiscovery.Ipv6ListenerReachesLoopback(
+    Ipv6( [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 ] ) ), '::1' );
+  Assert.IsFalse( TAutomationDiscovery.Ipv6ListenerReachesLoopback(
+    Ipv6( [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, $FF, $FF, 127, 0, 0, 2 ] ) ), '::ffff:127.0.0.2' );
+  Assert.IsFalse( TAutomationDiscovery.Ipv6ListenerReachesLoopback(
+    Ipv6( [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, $FF, $FF, 10, 0, 0, 1 ] ) ), '::ffff:10.0.0.1' );
+  Assert.IsFalse( TAutomationDiscovery.Ipv6ListenerReachesLoopback(
+    Ipv6( [ $20, $01, $0D, $B8 ] ) ), '2001:db8::' );
+  Assert.IsFalse( TAutomationDiscovery.Ipv6ListenerReachesLoopback(
+    Ipv6( [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 127, 0, 0, 1 ] ) ), '::127.0.0.1 ( IPv4-compatible, deprecated, not mapped )' );
+
+end;
+
+/// <summary>A TCP table port field: the port in network order in the low word.</summary>
+/// <param name="APort">The port, host order.</param>
+/// <returns>The field.</returns>
+function PortField( APort: Word ): Cardinal;
+begin
+  Result            := ( APort shr 8 ) or ( ( APort and $FF ) shl 8 );
+end;
+
+/// <summary>Appends a little-endian DWORD.</summary>
+/// <param name="ABytes">The buffer.</param>
+/// <param name="AValue">The value.</param>
+procedure PutDword( var ABytes: TBytes; AValue: Cardinal );
+begin
+  var i             := Length( ABytes );
+  SetLength( ABytes, i + 4 );
+  Move( AValue, ABytes[ i ], 4 );
+end;
+
+/// <summary>An IPv4 table row ( 24 bytes ): state, local address, local port, remote address, remote port, PID.</summary>
+/// <param name="ABytes">The table being built.</param>
+/// <param name="AState">The state.</param>
+/// <param name="AAddr">The local address, little-endian.</param>
+/// <param name="APort">The local port.</param>
+/// <param name="APid">The owner.</param>
+procedure PutRow4( var ABytes: TBytes; AState, AAddr: Cardinal; APort: Word; APid: Cardinal );
+begin
+  PutDword( ABytes, AState );
+  PutDword( ABytes, AAddr );
+  PutDword( ABytes, PortField( APort ) );
+  PutDword( ABytes, 0 );
+  PutDword( ABytes, 0 );
+  PutDword( ABytes, APid );
+end;
+
+/// <summary>An IPv6 table row ( 56 bytes ).</summary>
+/// <param name="ABytes">The table being built.</param>
+/// <param name="AState">The state.</param>
+/// <param name="AAddr">The local address.</param>
+/// <param name="APort">The local port.</param>
+/// <param name="ARemoteFirstByte">The first byte of the remote address ( 0 for none ).</param>
+/// <param name="APid">The owner.</param>
+procedure PutRow6( var ABytes: TBytes; AState: Cardinal; const AAddr: TAutomationIpv6Address; APort: Word;
+  ARemoteFirstByte: Byte; APid: Cardinal );
+begin
+  var i             := Length( ABytes );
+  SetLength( ABytes, i + 16 );
+  Move( AAddr, ABytes[ i ], 16 );
+  PutDword( ABytes, 0 );                         // local scope id
+  PutDword( ABytes, PortField( APort ) );
+  i                 := Length( ABytes );
+  SetLength( ABytes, i + 16 );
+  FillChar( ABytes[ i ], 16, 0 );
+  ABytes[ i ]       := ARemoteFirstByte;
+  PutDword( ABytes, 0 );                         // remote scope id
+  PutDword( ABytes, 0 );                         // remote port
+  PutDword( ABytes, AState );
+  PutDword( ABytes, APid );
+end;
+
+procedure TTestGllAutomationClient.ListenersOnPort_ReadsBothTables;
+const
+  APP_PID           = 1000;
+  OTHER_PID         = 2000;
+  PORT              = 50123;
+var
+  aTable4, aTable6, aBenign6, aShort6: TBytes;
+begin
+
+  PutDword( aTable4, 1 );
+  PutRow4( aTable4, 0, AUTOMATION_LOOPBACK_ADDR, PORT, APP_PID );
+
+  //  the app alone on IPv4, an IPv6 table with only harmless rows: trusted
+  PutDword( aBenign6, 3 );
+  PutRow6( aBenign6, 0, Ipv6( [ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1 ] ), PORT, 0, OTHER_PID );  // ::1
+  PutRow6( aBenign6, 0, Ipv6( [] ), PORT, $20, OTHER_PID );                                               // has a remote end
+  PutRow6( aBenign6, 0, Ipv6( [] ), PORT + 1, 0, OTHER_PID );                                             // another port
+  var aSeen         := TAutomationDiscovery.ListenersOnPort( aTable4, aBenign6, PORT );
+  Assert.AreEqual( 1, Integer( Length( aSeen ) ), 'only the IPv4 listener counts' );
+  Assert.AreEqual( Cardinal( AUTOMATION_LOOPBACK_ADDR ), aSeen[ 0 ].Addr );
+  Assert.IsTrue( TAutomationDiscovery.ListenersTrust( aSeen, APP_PID ), 'harmless IPv6 rows made the port untrusted' );
+
+  //  another process dual-stack on [::] on the port: a wildcard listener, so untrusted
+  PutDword( aTable6, 1 );
+  PutRow6( aTable6, 0, Ipv6( [] ), PORT, 0, OTHER_PID );
+  aSeen             := TAutomationDiscovery.ListenersOnPort( aTable4, aTable6, PORT );
+  Assert.AreEqual( 2, Integer( Length( aSeen ) ), 'the [::] listener was not read' );
+  Assert.AreEqual( Cardinal( OTHER_PID ), aSeen[ 1 ].Pid );
+  Assert.AreEqual( Cardinal( 0 ), aSeen[ 1 ].Addr, 'an IPv6 listener reaching loopback must count as the wildcard' );
+  Assert.IsFalse( TAutomationDiscovery.ListenersTrust( aSeen, APP_PID ), 'a dual-stack listener on the port was ignored' );
+
+  //  a count larger than the buffer is capped at the rows present
+  PutDword( aShort6, 5 );
+  PutRow6( aShort6, 0, Ipv6( [] ), PORT, 0, OTHER_PID );
+  Assert.AreEqual( 2, Integer( Length( TAutomationDiscovery.ListenersOnPort( aTable4, aShort6, PORT ) ) ) );
+  Assert.AreEqual( 1, Integer( Length( TAutomationDiscovery.ListenersOnPort( aTable4, nil, PORT ) ) ), 'no IPv6 table' );
 
 end;
 
