@@ -1673,7 +1673,9 @@ end;
 ///   point: what the IDE calls a value is not what an external debugger calls it.
 /// </summary>
 /// <param name="AReq">The request: <c>expr</c>, <c>thread?</c>, <c>sideEffects?</c> (allow calls into the process; default false).</param>
-/// <returns><c>{ expr, result, canModify, address, size }</c>.</returns>
+/// <returns><c>{ expr, result, canModify, address, size }</c>, and, when <c>result</c> is a string literal, <c>value</c>
+/// (its characters, decoded by <see cref="DecodeDebuggerString"/>: escapes resolved, doubled quotes undoubled) and
+/// <c>cut</c> (True when the evaluator cut it with <c>...</c>, which <c>value</c> then leaves off).</returns>
 /// <exception cref="EAutoError">
 ///   <c>EvalError</c> with the evaluator's message; <c>EvalDeferred</c> when it had to call into the
 ///   process and has no result yet; <c>EvalBusy</c> when the evaluator is busy.
@@ -1709,6 +1711,14 @@ begin
   oRes.AddPair( 'canModify', TJSONBool.Create( bCanModify ) );
   oRes.AddPair( 'address', Hex64( iAddress ) );
   oRes.AddPair( 'size', TJSONNumber.Create( Int64( iSize ) ) );
+  // the rendering is Delphi source - 'a'#13#10'b''c', cut with '...' - which every caller had to decode by eye
+  var sValue: string;
+  var bCut: Boolean;
+  if DecodeDebuggerString( sText, sValue, bCut ) then
+  begin
+    oRes.AddPair( 'value', sValue );
+    oRes.AddPair( 'cut', TJSONBool.Create( bCut ) );
+  end;
   Result := oRes;
 
 end;

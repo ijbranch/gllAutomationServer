@@ -116,6 +116,17 @@ type
     ///   const kept, names dropped; a function type gives 'function' and a non-method type ''.
     /// </summary>
     [Test] procedure EventShape_DescribesTheParameters;
+    /// <summary>
+    ///   DecodeDebuggerString turns both IDEs' renderings back into the characters: decimal (64-bit) and hex (32-bit)
+    ///   escapes, a doubled quote as one, a '#' inside the quotes as text, line breaks and #0 kept as they are - the
+    ///   forms seen live on 2026-11-09.
+    /// </summary>
+    [Test] procedure DecodeDebuggerString_ReadsBothIdesRenderings;
+    /// <summary>
+    ///   DecodeDebuggerString reports the evaluator's cut - '...' after 1024 characters - and leaves the marker off the
+    ///   value; a short value that merely ends in '...' is not a cut; anything not a string literal is refused.
+    /// </summary>
+    [Test] procedure DecodeDebuggerString_KnowsTheCutAndRefusesNonStrings;
   end;
 
 implementation
@@ -464,6 +475,57 @@ begin
   Assert.AreEqual( 'TObject; const string; out Integer', EventShape( TypeInfo( TShapeConstOut ) ) );
   Assert.AreEqual( 'function', EventShape( TypeInfo( TShapeFunction ) ) );
   Assert.AreEqual( '', EventShape( TypeInfo( Integer ) ) );
+
+end;
+
+procedure TTestGllIdeAutomationRules.DecodeDebuggerString_ReadsBothIdesRenderings;
+begin
+
+  var sValue: string;
+  var bCut: Boolean;
+  Assert.IsTrue( DecodeDebuggerString( '''one''#13#10''two''', sValue, bCut ) );
+  Assert.AreEqual( 'one'#13#10'two', sValue, '64-bit: decimal escapes' );
+  Assert.IsFalse( bCut );
+  Assert.IsTrue( DecodeDebuggerString( '''one''#$D#$A''two''', sValue, bCut ) );
+  Assert.AreEqual( 'one'#13#10'two', sValue, '32-bit: hex escapes' );
+  Assert.IsTrue( DecodeDebuggerString( '''SELECT * FROM T WHERE x = ''''''''''', sValue, bCut ) );
+  Assert.AreEqual( 'SELECT * FROM T WHERE x = ''''', sValue, 'a doubled quote is one: two quotes, not four' );
+  Assert.IsTrue( DecodeDebuggerString( '''Issue #123''#10''x''#0', sValue, bCut ) );
+  Assert.AreEqual( 'Issue #123'#10'x'#0, sValue, False, 'a # inside the quotes is text; a lone LF and #0 are kept' );
+  Assert.IsTrue( DecodeDebuggerString( '#13#10', sValue, bCut ) );
+  Assert.AreEqual( #13#10, sValue, 'escapes alone' );
+  Assert.IsTrue( DecodeDebuggerString( '''''', sValue, bCut ) );
+  Assert.AreEqual( '', sValue, 'the empty string' );
+
+end;
+
+procedure TTestGllIdeAutomationRules.DecodeDebuggerString_KnowsTheCutAndRefusesNonStrings;
+begin
+
+  var sValue: string;
+  var bCut: Boolean;
+  // exactly the 64-bit IDE's form, measured live: 1024 characters, then '...', inside the closing quote
+  Assert.IsTrue( DecodeDebuggerString( '''' + StringOfChar( 'x', 1024 ) + '...''', sValue, bCut ) );
+  Assert.IsTrue( bCut, 'cut' );
+  Assert.AreEqual( StringOfChar( 'x', 1024 ), sValue, 'the marker left off' );
+  Assert.IsTrue( DecodeDebuggerString( '''wait...''', sValue, bCut ) );
+  Assert.IsFalse( bCut, 'a short value ending in dots is not a cut' );
+  Assert.AreEqual( 'wait...', sValue );
+  // one short of the cut: 1023 characters and the dots are a value, not a cut
+  Assert.IsTrue( DecodeDebuggerString( '''' + StringOfChar( 'x', 1023 ) + '...''', sValue, bCut ) );
+  Assert.IsFalse( bCut, '1026 characters is under the cut' );
+  // malformed renderings decode without raising: an escape without digits is kept as written,
+  // an unclosed run (a value cut mid-run) is read to the end
+  Assert.IsTrue( DecodeDebuggerString( '''a''#', sValue, bCut ) );
+  Assert.AreEqual( 'a#', sValue, 'a lone # is text' );
+  Assert.IsTrue( DecodeDebuggerString( '''a''#$', sValue, bCut ) );
+  Assert.AreEqual( 'a#$', sValue, '#$ without digits is text' );
+  Assert.IsTrue( DecodeDebuggerString( '''abc', sValue, bCut ) );
+  Assert.AreEqual( 'abc', sValue, 'an unclosed run' );
+  Assert.IsFalse( DecodeDebuggerString( '42', sValue, bCut ), 'a number' );
+  Assert.IsFalse( DecodeDebuggerString( '(42,''text'')', sValue, bCut ), 'a record' );
+  Assert.IsFalse( DecodeDebuggerString( 'E2003 Undeclared identifier: ''x''', sValue, bCut ), 'an error' );
+  Assert.AreEqual( '', sValue, 'nothing decoded when refused' );
 
 end;
 

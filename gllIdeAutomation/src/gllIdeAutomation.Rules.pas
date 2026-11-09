@@ -7,6 +7,9 @@
     svn r6031: EventShape is ported from EventShape in ide\GxInspect_Ide.pas;
     FileIdMatches follows the matching rules of FindModuleFor and FindFormView
     in the same unit (by path, by file name, then by name without extension).
+    DecodeDebuggerString is ported from DebuggerStringToText in
+    glldzdebugvisualizer's u_dzDebugVisualizerStringParsers, GITLAK's own
+    code in that fork (2026-11-09).
 
     This code and all associated intellectual property are the exclusive
     property of Ian Branch (GITLAK Software).  The portions named above are
@@ -251,6 +254,30 @@ function DebugSessionBlocksQuit( AProcessCount: Integer; ATerminate: Boolean ): 
 /// <param name="ATypeInfo">The method type's type information.</param>
 /// <returns>The parameter list; <c>function</c> for a method type that is not a procedure; '' for a non-method type.</returns>
 function EventShape( ATypeInfo: PTypeInfo ): string;
+
+const
+  /// <summary>
+  ///   Characters the 64-bit IDE's evaluator keeps of a string before it cuts it with <c>...</c> (measured
+  ///   2026-11-09; the 32-bit IDE keeps about 4096). A decoded value at least this long plus the marker, ending in
+  ///   <c>...</c>, is taken for a cut one.
+  /// </summary>
+  EVALUATOR_CUT_CHARS = 1024;
+
+/// <summary>
+///   Decodes the debugger's rendering of a string value - quoted runs joined by character escapes, the way Delphi
+///   source writes one: <c>'one'#13#10'two'</c> in the 64-bit IDE, <c>'one'#$D#$A'two'</c> in the 32-bit IDE - back
+///   into its characters, exactly: line breaks and <c>#0</c> stay as they are. A <c>#</c> inside the quotes is text,
+///   and a quote doubled inside a run is one quote (both Delphi 13 debuggers double them; seen live 2026-11-09).
+/// </summary>
+/// <param name="AText">The evaluator's result.</param>
+/// <param name="AValue">Receives the characters, without the evaluator's <c>...</c> marker when
+/// <paramref name="ACut"/> is set.</param>
+/// <param name="ACut">Receives True when the value ends in <c>...</c> after at least
+/// <see cref="EVALUATOR_CUT_CHARS"/> characters: the evaluator cut it, and the real value is longer. A genuine value
+/// that long ending in three dots reads the same; nothing in the rendering tells them apart.</param>
+/// <returns>True when <paramref name="AText"/> is a string literal (it starts with a quote or <c>#</c>); False for
+/// anything else - a number, a record, an error - and then <paramref name="AValue"/> is empty.</returns>
+function DecodeDebuggerString( const AText: string; out AValue: string; out ACut: Boolean ): Boolean;
 
 implementation
 
@@ -536,6 +563,99 @@ begin
     Result := Result + string( PShortString( pWalk )^ );
     Inc( pWalk, PByte( pWalk )^ + 1 );
   end;
+
+end;
+
+/// <summary>Reads one character escape, <c>#nnn</c> or <c>#$hh</c>, starting at its <c>#</c>.</summary>
+/// <param name="AText">The rendering.</param>
+/// <param name="AIndex">On entry the index of the <c>#</c>; on exit the index after the escape.</param>
+/// <param name="ABuilder">Receives the character, or the text as written if it is no well-formed escape.</param>
+procedure ReadEscape( const AText: string; var AIndex: Integer; ABuilder: TStringBuilder );
+begin
+
+  var iStart := AIndex;
+  Inc( AIndex );
+  var bHex := ( AIndex <= Length( AText ) ) and ( AText[ AIndex ] = '$' );
+  if bHex then Inc( AIndex );
+  var sDigits := '';
+  while ( AIndex <= Length( AText ) )
+    and ( bHex and CharInSet( AText[ AIndex ], [ '0'..'9', 'a'..'f', 'A'..'F' ] )
+    or not bHex and CharInSet( AText[ AIndex ], [ '0'..'9' ] ) ) do
+  begin
+    sDigits := sDigits + AText[ AIndex ];
+    Inc( AIndex );
+  end;
+  var iCode := -1;
+  if sDigits <> '' then
+    if bHex then iCode := StrToIntDef( '$' + sDigits, -1 ) else iCode := StrToIntDef( sDigits, -1 );
+  if ( iCode >= 0 ) and ( iCode <= $FFFF ) then
+    ABuilder.Append( Char( iCode ) )
+  else
+    ABuilder.Append( Copy( AText, iStart, AIndex - iStart ) );    // not an escape after all: keep it as written
+
+end;
+
+/// <summary>Reads one quoted run, starting at its opening quote.</summary>
+/// <param name="AText">The rendering.</param>
+/// <param name="AIndex">On entry the index of the opening quote; on exit the index after the closing one, or past
+/// the end when the run is not closed (a cut value).</param>
+/// <param name="ABuilder">Receives the run's text.</param>
+procedure ReadQuotedRun( const AText: string; var AIndex: Integer; ABuilder: TStringBuilder );
+begin
+
+  var iLen := Length( AText );
+  Inc( AIndex );
+  while AIndex <= iLen do
+  begin
+    if AText[ AIndex ] <> '''' then
+    begin
+      ABuilder.Append( AText[ AIndex ] );
+      Inc( AIndex );
+    end
+    else if ( AIndex < iLen ) and ( AText[ AIndex + 1 ] = '''' ) then
+    begin
+      ABuilder.Append( '''' );    // a doubled quote is one quote
+      Inc( AIndex, 2 );
+    end
+    else if ( AIndex = iLen ) or ( AText[ AIndex + 1 ] = '#' ) or ( Copy( AText, AIndex + 1, 3 ) = '...' ) then
+    begin
+      Inc( AIndex );    // the closing quote - also before a '...' the debugger put after a value it cut
+      Exit;
+    end
+    else
+    begin
+      ABuilder.Append( '''' );    // a lone quote inside the text, from a debugger that does not double them
+      Inc( AIndex );
+    end;
+  end;
+
+end;
+
+function DecodeDebuggerString( const AText: string; out AValue: string; out ACut: Boolean ): Boolean;
+begin
+
+  AValue := '';
+  ACut := False;
+  var sText := Trim( AText );
+  if ( sText = '' ) or not CharInSet( sText[ 1 ], [ '''', '#' ] ) then Exit( False );
+  var oBuilder := TStringBuilder.Create;
+  try
+    var i := 1;
+    while i <= Length( sText ) do
+      case sText[ i ] of
+        '''': ReadQuotedRun( sText, i, oBuilder );
+        '#':  ReadEscape( sText, i, oBuilder );
+      else
+        oBuilder.Append( sText[ i ] );    // text between the runs, e.g. a '...' after a cut value
+        Inc( i );
+      end;
+    AValue := oBuilder.ToString;
+  finally
+    oBuilder.Free;
+  end;
+  ACut := ( Length( AValue ) >= EVALUATOR_CUT_CHARS + 3 ) and AValue.EndsWith( '...' );
+  if ACut then SetLength( AValue, Length( AValue ) - 3 );
+  Result := True;
 
 end;
 
