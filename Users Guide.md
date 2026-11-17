@@ -51,6 +51,7 @@ Read what is on screen, then act on it:
 | See what a control calls | `get` an event — `OnClick` → `TfrmMain.btnSaveClick`; `@events` for every assigned one (read-only) |
 | Click a button | `click` — `mode:"message"` if the click opens a modal |
 | Click at a place in a control (a grid cell, a list row) | `click_at` — `x`, `y` in the control's client coordinates, `shift:"Ctrl"` |
+| Ask what is at a place (a point read off a screenshot) | `control_at` — `x`, `y`; its name, class and text, disabled controls included; `origin:"window"` for screenshot pixels |
 | Drop files on a control | `drop_files` — `files:["D:\\Data\\a.csv"]`, as Explorer does |
 | Run a menu or toolbar command | `action` |
 | Type, or press a shortcut | `keys` — `text:"ACME"`, `keys:"Ctrl+S Tab"` |

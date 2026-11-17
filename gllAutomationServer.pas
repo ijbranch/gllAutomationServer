@@ -242,7 +242,7 @@ const
   /// <summary>Number of consecutive ports probed from <c>AUTOMATION_PORT_BASE</c> before the bind attempt is abandoned.</summary>
   AUTOMATION_PORT_SPAN = 200; // ports to try before giving up
   /// <summary>Wire-protocol/feature version reported by the <c>ping</c>/<c>info</c> command's <c>server</c> field; bump when commands change.</summary>
-  SERVER_VERSION    = '0.15'; // + get reads events (handler names), @events · 0.14: screenshot path, the Client unit · 0.13: click_at, drop_files, dialogs hwnd/outcome/clickable/modal/texts · 0.12: screenshot name/form render, maxWidth · 0.11: reachable/synthetic/path names, dotted props · 0.10: keys · 0.9: registered commands · 0.8: click count/stoppedReason · set changed/previous
+  SERVER_VERSION    = '0.16'; // + control_at · 0.15: get reads events (handler names), @events · 0.14: screenshot path, the Client unit · 0.13: click_at, drop_files, dialogs hwnd/outcome/clickable/modal/texts · 0.12: screenshot name/form render, maxWidth · 0.11: reachable/synthetic/path names, dotted props · 0.10: keys · 0.9: registered commands · 0.8: click count/stoppedReason · set changed/previous
   /// <summary>Upper bound on <c>click</c>'s <c>count</c> (a mistyped count must not lock the UI thread for minutes).</summary>
   CLICK_COUNT_MAX   = 1000;
   /// <summary>Upper bound on the property list returned with a <c>NoProp</c> failure; the reply is read by an agent, so it stays bounded.</summary>
@@ -2739,29 +2739,34 @@ begin
 
 end;
 
+/// <summary>Refuses a point outside a control's client area.</summary>
+/// <param name="ACtl">The control.</param>
+/// <param name="AX">The point's horizontal position, in the control's client coordinates.</param>
+/// <param name="AY">The point's vertical position, in the control's client coordinates.</param>
+/// <exception cref="EAutoError"><c>OutsideControl</c> for a point outside the client area.</exception>
+procedure CheckInsideClient( ACtl: TControl; AX, AY: Integer );
+begin
+
+  if ( AX < 0 ) or ( AY < 0 ) or ( AX >= ACtl.ClientWidth ) or ( AY >= ACtl.ClientHeight ) then
+    raise EAutoError.CreateCode( 'OutsideControl', Format( '%d,%d is outside %s, whose client area is %d x %d',
+      [ AX, AY, ACtl.Name, ACtl.ClientWidth, ACtl.ClientHeight ] ) );
+
+end;
+
 /// <summary>
-///   Finds the window that input at a point of a control lands in: the control's own window, or for a control
-///   without one its parent's, and in it whatever child window lies on top there - as Windows itself would route a
-///   real click (GxInspect, <c>TryGetWindowAtPoint</c>).
+///   Finds the window a point of a control lies in: the control's own window, or for a control without one its
+///   parent's, and in it whatever visible child window lies on top there - as Windows itself would route a real
+///   click (GxInspect, <c>TryGetWindowAtPoint</c>).  A disabled window is reached like any other: whether a user
+///   could click it is the caller's question.
 /// </summary>
 /// <param name="ACtl">The control.</param>
 /// <param name="AX">The point's horizontal position, in the control's client coordinates.</param>
 /// <param name="AY">The point's vertical position, in the control's client coordinates.</param>
 /// <param name="APoint">Receives the point in the returned window's client coordinates.</param>
 /// <returns>The window.</returns>
-/// <exception cref="EAutoError">
-///   <c>OutsideControl</c> for a point outside the client area; <c>NotClickable</c> when the control, or the window
-///   at the point or one it sits in, is hidden or disabled (a modal dialog in front disables it); <c>NoWindow</c> when
-///   the control has no window yet.
-/// </exception>
-function WindowAtControlPoint( ACtl: TControl; AX, AY: Integer; out APoint: TPoint ): HWND;
+/// <exception cref="EAutoError"><c>NoWindow</c> when the control has no window yet, or is in none.</exception>
+function DescendToWindow( ACtl: TControl; AX, AY: Integer; out APoint: TPoint ): HWND;
 begin
-
-  if ( AX < 0 ) or ( AY < 0 ) or ( AX >= ACtl.ClientWidth ) or ( AY >= ACtl.ClientHeight ) then
-    raise EAutoError.CreateCode( 'OutsideControl', Format( '%d,%d is outside %s, whose client area is %d x %d',
-      [ AX, AY, ACtl.Name, ACtl.ClientWidth, ACtl.ClientHeight ] ) );
-  if not ( ACtl.Visible and ACtl.Enabled ) then
-    raise EAutoError.CreateCode( 'NotClickable', ACtl.Name + ' is hidden or disabled, so a user could not reach it' );
 
   // A control without a window of its own gets its mouse messages through its parent.
   if ACtl is TWinControl then
@@ -2786,9 +2791,58 @@ begin
     Result          := hChild;
   until False;
 
+end;
+
+/// <summary>
+///   Finds the window that input at a point of a control lands in, as <see cref="DescendToWindow"/> does, and
+///   checks a user could click there.
+/// </summary>
+/// <param name="ACtl">The control.</param>
+/// <param name="AX">The point's horizontal position, in the control's client coordinates.</param>
+/// <param name="AY">The point's vertical position, in the control's client coordinates.</param>
+/// <param name="APoint">Receives the point in the returned window's client coordinates.</param>
+/// <returns>The window.</returns>
+/// <exception cref="EAutoError">
+///   <c>OutsideControl</c> for a point outside the client area; <c>NotClickable</c> when the control, or the window
+///   at the point or one it sits in, is hidden or disabled (a modal dialog in front disables it); <c>NoWindow</c> when
+///   the control has no window yet.
+/// </exception>
+function WindowAtControlPoint( ACtl: TControl; AX, AY: Integer; out APoint: TPoint ): HWND;
+begin
+
+  CheckInsideClient( ACtl, AX, AY );
+  if not ( ACtl.Visible and ACtl.Enabled ) then
+    raise EAutoError.CreateCode( 'NotClickable', ACtl.Name + ' is hidden or disabled, so a user could not reach it' );
+
+  Result            := DescendToWindow( ACtl, AX, AY, APoint );
+
   if not WndCanBeClicked( Result ) then
     raise EAutoError.CreateCode( 'NotClickable', 'The window at that point, or one it sits in, is hidden or disabled - ' +
       'a modal dialog in front disables it; ask dialogs' );
+
+end;
+
+/// <summary>
+///   The VCL control at a point of a window: a visible graphic control (a label, a speed button) drawn on the window
+///   there, else the window's own control.
+/// </summary>
+/// <param name="AWnd">The window.</param>
+/// <param name="APoint">The point, in its client coordinates.</param>
+/// <param name="AAllowDisabled">
+///   Whether a disabled graphic control counts.  True to say what is there; False to say what a click reaches,
+///   because the VCL passes a click on a disabled graphic control to the window under it.
+/// </param>
+/// <returns>The control, or nil when the window is no VCL control's.</returns>
+function ControlAtWindowPoint( AWnd: HWND; const APoint: TPoint; AAllowDisabled: Boolean ): TControl;
+begin
+
+  Result            := FindControl( AWnd );
+  if Result is TWinControl then
+  begin
+    var oOnTop      := TWinControl( Result ).ControlAtPos( APoint, AAllowDisabled );
+    if Assigned( oOnTop ) then
+      Result        := oOnTop;
+  end;
 
 end;
 
@@ -2799,13 +2853,7 @@ end;
 function DescribeReached( AWnd: HWND; const APoint: TPoint ): string;
 begin
 
-  var oReached: TControl := FindControl( AWnd );
-  if oReached is TWinControl then
-  begin
-    var oOnTop      := TWinControl( oReached ).ControlAtPos( APoint, False );
-    if Assigned( oOnTop ) then
-      oReached      := oOnTop;
-  end;
+  var oReached      := ControlAtWindowPoint( AWnd, APoint, False );
   if oReached = nil then
     Result          := WndClass( AWnd )
   else if oReached.Name <> '' then
@@ -2860,6 +2908,208 @@ begin
   oRes.AddPair( 'y', TJSONNumber.Create( iY ) );
   oRes.AddPair( 'shift', sShift );
   oRes.AddPair( 'reaches', DescribeReached( hAt, ptAt ) );
+  Result            := oRes;
+
+end;
+
+{ ── control_at (VCL — main thread) ──────────────────────────────────────── }
+
+/// <summary>Whether a control is on screen: a windowed control showing, or a graphic control visible on a showing parent.</summary>
+/// <param name="ACtl">The control.</param>
+/// <returns>True when it is showing.</returns>
+function ControlShowing( ACtl: TControl ): Boolean;
+begin
+
+  Result            := if ACtl is TWinControl then TWinControl( ACtl ).Showing
+    else ACtl.Visible and ( ACtl.Parent <> nil ) and ACtl.Parent.Showing;
+
+end;
+
+/// <summary>
+///   Turns a point given from the top left of a control's outer window rectangle (a form's frame included, as an
+///   <c>screenshot</c> of it shows it) into one in its client coordinates.  A graphic control has no frame, so its
+///   point is left as it is.
+/// </summary>
+/// <param name="ACtl">The control; a windowed one must be showing.</param>
+/// <param name="AX">The point's horizontal position: in, from the window's left edge; out, in client coordinates.</param>
+/// <param name="AY">The point's vertical position: in, from the window's top edge; out, in client coordinates.</param>
+/// <exception cref="EOSError">When Windows cannot report the window's rectangle.</exception>
+procedure WindowToClientPoint( ACtl: TControl; var AX, AY: Integer );
+begin
+
+  if ACtl is not TWinControl then Exit;
+
+  var hCtl          := TWinControl( ACtl ).Handle;
+  var rc: TRect;
+  if not GetWindowRect( hCtl, rc ) then
+    RaiseLastOSError;
+  var pt            := Point( rc.Left + AX, rc.Top + AY );
+  Winapi.Windows.ScreenToClient( hCtl, pt );
+  AX                := pt.X;
+  AY                := pt.Y;
+
+end;
+
+/// <summary>A control's text, as a user reads it: a label's or button's caption, an edit's text.</summary>
+/// <param name="ACtl">The control.</param>
+/// <param name="ATruncated">Receives True when the text was longer than <c>CONTROL_TEXT_MAX</c> characters and was cut.</param>
+/// <returns>The text, at most <c>CONTROL_TEXT_MAX</c> characters.</returns>
+function ControlText( ACtl: TControl; out ATruncated: Boolean ): string;
+const
+  /// <summary>The most text a reply carries: enough to recognise a control by, not a memo's whole content.</summary>
+  CONTROL_TEXT_MAX  = 256;
+begin
+
+  var iLen          := ACtl.GetTextLen;
+  ATruncated        := iLen > CONTROL_TEXT_MAX;
+  SetLength( Result, if ATruncated then CONTROL_TEXT_MAX else iLen );
+  if Result <> '' then
+    SetLength( Result, ACtl.GetTextBuf( PChar( Result ), Length( Result ) + 1 ) );
+
+end;
+
+/// <summary>
+///   Describes the control a point reaches: <see cref="CompToJSON"/>'s <c>{ name, class, path?, props }</c>, the name
+///   being the one <c>tree</c> lists it under (its synthetic <c>@TClass#N</c> when unnamed) on the form it sits on,
+///   plus <c>form</c> and <c>addressable</c>.  The value that addresses it is <c>path</c> when present, else
+///   <c>name</c>; for the form itself <c>path</c> is empty, because an empty <c>name</c> is what means the form.
+/// </summary>
+/// <param name="AHit">The control.</param>
+/// <param name="AForm">The form asked about; used when the control sits on no form.</param>
+/// <returns>A new JSON object.</returns>
+function HitToJSON( AHit: TControl; AForm: TForm ): TJSONObject;
+begin
+
+  // The innermost form: a form docked into another is where its controls are addressed.  Only a named TForm can be
+  // given as "form" again: AutoResolveForm finds forms by name, and takes an empty one for the main form.
+  var oHome         := AForm;
+  var oParentForm   := GetParentForm( AHit, False );
+  var bHomeOk       := True;
+  if oParentForm is TForm then
+    oHome           := TForm( oParentForm )
+  else if oParentForm <> nil then
+    bHomeOk         := False;
+  bHomeOk           := bHomeOk and ( oHome.Name <> '' );
+
+  var sName         := AHit.Name;
+  var sPath         := '';
+  var bFound        := False;
+  if AHit = oHome then
+    bFound          := True
+  else
+  begin
+    var aComps      := EnumReachable( oHome );
+    var aSynth      := SyntheticNames( aComps );
+    for var i := 0 to High( aComps ) do
+      if aComps[ i ] = AHit then
+      begin
+        if sName = '' then
+          sName     := aSynth[ i ];
+        sPath       := CompPath( AHit, oHome, aSynth[ i ] );
+        bFound      := True;
+        Break;
+      end;
+  end;
+
+  if sName = '' then
+    sName           := AHit.ClassName;
+  if not bFound then
+    sPath           := sName;
+
+  Result            := CompToJSON( AHit, sName, sPath );
+  Result.AddPair( 'form', if ( oParentForm <> nil ) and ( oParentForm is not TForm ) then oParentForm.Name else oHome.Name );
+  Result.AddPair( 'addressable', TJSONBool.Create( bFound and bHomeOk ) );
+
+end;
+
+/// <summary>
+///   <c>control_at</c> command: which control is at a point - read only, nothing is clicked.  The point is found as a
+///   real mouse would find it: through the visible windows on top there (a control on a hidden tab page is never the
+///   answer), then any graphic control drawn there.  Unlike <c>click_at</c>, a disabled control is an answer too,
+///   with <c>clickable</c> saying whether a user could click it.
+/// </summary>
+/// <param name="AReq">The request object (<c>form?</c>, <c>name?</c> - the form itself when omitted, <c>x</c>, <c>y</c>, <c>origin?</c>).</param>
+/// <returns>
+///   For a VCL control <c>{ vcl:true, name, class, path?, props, form, addressable, text, textTruncated?, innerWindow?,
+///   clickable, x, y }</c> - <c>innerWindow</c> the class of a window inside it the point is on (a combo box's edit);
+///   for any other window <c>{ vcl:false, class, text, clickable, x, y }</c>.  <c>x</c>, <c>y</c> are the point in the
+///   asked control's client coordinates.  It is addressed by <c>path</c> when present (empty for the form itself:
+///   omit <c>name</c>), else by <c>name</c>.
+/// </returns>
+/// <exception cref="EAutoError">
+///   The addressing codes; <c>NotVisual</c> (not a control); <c>BadRequest</c> (no <c>x</c> / <c>y</c>, or an
+///   <c>origin</c> other than <c>client</c> or <c>window</c>); <c>NotShowing</c> (the control is not on screen);
+///   <c>OutsideControl</c>; <c>NoWindow</c>.
+/// </exception>
+/// <exception cref="EOSError">When <c>origin:"window"</c> and Windows cannot report the window's rectangle.</exception>
+function AutoCmdControlAt( AReq: TJSONObject ): TJSONValue;
+begin
+
+  var oForm         := AutoResolveForm( AReq );
+  var oComp         := AutoResolveComp( AReq, oForm );
+  if oComp is not TControl then
+    raise EAutoError.CreateCode( 'NotVisual', Format( '%s (%s) is not a control, so nothing is at a point of it',
+      [ oComp.Name, oComp.ClassName ] ) );
+  var oCtl          := TControl( oComp );
+
+  var iX            := NeedIntArg( AReq, 'x', 'control_at' );
+  var iY            := NeedIntArg( AReq, 'y', 'control_at' );
+  var sOrigin       := AReq.GetValue<string>( 'origin', 'client' );
+  if not ( SameText( sOrigin, 'client' ) or SameText( sOrigin, 'window' ) ) then
+    raise EAutoError.CreateCode( 'BadRequest', Format( '"origin" is client or window, not "%s"', [ sOrigin ] ) );
+
+  if not ControlShowing( oCtl ) then
+    raise EAutoError.CreateCode( 'NotShowing', oCtl.Name + ' is not showing, so nothing is at a point of it' );
+  if SameText( sOrigin, 'window' ) then
+    WindowToClientPoint( oCtl, iX, iY );
+  CheckInsideClient( oCtl, iX, iY );
+
+  var ptAt: TPoint;
+  var hAt           := DescendToWindow( oCtl, iX, iY, ptAt );
+  var oHit          := ControlAtWindowPoint( hAt, ptAt, True );
+
+  // A window the VCL did not create can still belong to a VCL control: a combo box's edit, a grid's in-place editor,
+  // a list view's header.  Name the nearest VCL control it sits in, and say which inner window the point is on.
+  var sInner        := '';
+  if oHit = nil then
+  begin
+    var hUp         := hAt;
+    while ( oHit = nil ) and ( ( GetWindowLong( hUp, GWL_STYLE ) and WS_CHILD ) <> 0 ) do
+    begin
+      hUp           := GetParent( hUp );
+      if hUp = 0 then Break;
+      oHit          := FindControl( hUp );
+    end;
+    if oHit <> nil then
+      sInner        := WndClass( hAt );
+  end;
+
+  var oRes: TJSONObject;
+  var bClickable    := WndCanBeClicked( hAt );
+  if oHit = nil then
+  begin
+    oRes            := TJSONObject.Create;
+    oRes.AddPair( 'vcl', TJSONBool.Create( False ) );
+    oRes.AddPair( 'class', WndClass( hAt ) );
+    oRes.AddPair( 'text', WndText( hAt ) );
+  end
+  else
+  begin
+    // A graphic control is drawn on the window, so the window's state is its parent's; its own Enabled counts too.
+    if oHit is not TWinControl then
+      bClickable    := bClickable and oHit.Enabled;
+    oRes            := HitToJSON( oHit, oForm );
+    oRes.AddPair( 'vcl', TJSONBool.Create( True ) );
+    var bCut: Boolean;
+    oRes.AddPair( 'text', ControlText( oHit, bCut ) );
+    if bCut then
+      oRes.AddPair( 'textTruncated', TJSONBool.Create( True ) );
+    if sInner <> '' then
+      oRes.AddPair( 'innerWindow', sInner );
+  end;
+  oRes.AddPair( 'clickable', TJSONBool.Create( bClickable ) );
+  oRes.AddPair( 'x', TJSONNumber.Create( iX ) );
+  oRes.AddPair( 'y', TJSONNumber.Create( iY ) );
   Result            := oRes;
 
 end;
@@ -4016,9 +4266,7 @@ function PlanRenderOf( ACtl: TControl; const AArea, ATarget: string ): TRenderPl
 begin
 
   var oCtl          := ACtl;
-  var bShowing      := if oCtl is TWinControl then TWinControl( oCtl ).Showing
-    else oCtl.Visible and ( oCtl.Parent <> nil ) and oCtl.Parent.Showing;
-  if not bShowing then
+  if not ControlShowing( oCtl ) then
     raise EAutoError.CreateCode( 'NotShowing', oCtl.Name + ' is not showing, so it has nothing to render' );
 
   // The target's outer rectangle on screen: a windowed control's own window rectangle (a form's
@@ -4382,6 +4630,12 @@ begin
     else if SameText( sCmd, 'click_at' ) then
     begin
       var oOut      := AutoCmdClickAt( AReq );
+      Result.AddPair( 'ok', TJSONBool.Create( True ) );
+      Result.AddPair( 'result', oOut );
+    end
+    else if SameText( sCmd, 'control_at' ) then
+    begin
+      var oOut      := AutoCmdControlAt( AReq );
       Result.AddPair( 'ok', TJSONBool.Create( True ) );
       Result.AddPair( 'result', oOut );
     end

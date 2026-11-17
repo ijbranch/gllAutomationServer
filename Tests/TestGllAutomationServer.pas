@@ -189,6 +189,12 @@ type
     function JsonText( const AText: string ): string;
     /// <summary>Builds the test form: two panels that each OWN an edit named edtTown, two unnamed buttons, a memo, a plain edit, and a host panel with the docked edit parented in.</summary>
     procedure BuildForm;
+    /// <summary>
+    ///   Adds the control_at tests' panel to the test form: <c>pnlHit</c>, holding a disabled label <c>lblOff</c>, a
+    ///   disabled button <c>btnOff</c>, an unnamed label, and a page control <c>pgHit</c> whose two pages <c>tsA</c>
+    ///   (active) and <c>tsB</c> each hold an edit at the same place (<c>edtOnA</c>, <c>edtOnB</c>).
+    /// </summary>
+    procedure BuildHitPanel;
   public
     /// <summary>Registers the test commands, builds the test form, starts the server and reads the token.</summary>
     /// <exception cref="EAutoError">
@@ -340,6 +346,32 @@ type
     [Test] procedure ClickAt_ClicksAtThePoint_WithTheKeysAskedFor;
     /// <summary>A point outside the control's client area is refused as OutsideControl, and nothing is clicked.</summary>
     [Test] procedure ClickAt_OutsideTheControl_IsRefused;
+    /// <summary>
+    ///   control_at answers with the edit on the page that is showing, and after the page changes with the other
+    ///   page's edit at the same point: a control on a hidden tab page is never the answer, even where it lies under
+    ///   the point.
+    /// </summary>
+    [Test] procedure ControlAt_HiddenTabPage_IsNeverTheAnswer;
+    /// <summary>
+    ///   A disabled TLabel and a disabled TButton are found, with their class and text and clickable false (a click
+    ///   would pass a disabled label by); empty panel is the panel itself, clickable; an unnamed label is answered
+    ///   under the synthetic name that get then resolves to the same control.
+    /// </summary>
+    [Test] procedure ControlAt_FindsDisabledAndUnnamedControls;
+    /// <summary>origin:"window" counts from the form's frame, as a screenshot of the form shows it, and the reply gives the point back in client coordinates.</summary>
+    [Test] procedure ControlAt_WindowOrigin_CountsTheFrame;
+    /// <summary>A point outside the control is OutsideControl, an unknown origin or a missing y BadRequest, and a control on a hidden page NotShowing.</summary>
+    [Test] procedure ControlAt_BadRequests_AreRefused;
+    /// <summary>
+    ///   A point on bare form answers with the form itself, addressable, under an empty path - the empty name that
+    ///   addresses the form - since the form's own name resolves to nothing in the other commands.
+    /// </summary>
+    [Test] procedure ControlAt_BareForm_IsAddressedByAnEmptyPath;
+    /// <summary>
+    ///   A point on a combo box's inner edit, a window the VCL did not create, names the combo box with innerWindow
+    ///   "Edit" rather than an unaddressable bare window; a text over 256 characters comes back cut to 256 and flagged.
+    /// </summary>
+    [Test] procedure ControlAt_InnerWindowAndLongText;
     /// <summary>drop_files hands the control WM_DROPFILES carrying every file, in order, and the drop point in its client coordinates.</summary>
     [Test] procedure DropFiles_DeliversTheFilesAndThePoint;
     /// <summary>A control with no window up its chain that accepts files is refused as NoDropTarget: Explorer could not drop on it either.</summary>
@@ -403,7 +435,7 @@ implementation
 uses
   System.SysUtils, System.IOUtils, System.Diagnostics, System.Generics.Collections, System.TypInfo,
   Winapi.Windows, Winapi.Messages, Winapi.ShellAPI,
-  Vcl.Graphics, Vcl.Themes,
+  Vcl.Graphics, Vcl.Themes, Vcl.ComCtrls,
   IdTCPClient, IdGlobal,
   GllDUnitX.Station,
   gllAutomationServer, gllAutomationServer.Client;
@@ -416,7 +448,7 @@ const
   /// <summary>Name the test process registers under.</summary>
   APP_NAME        = 'gllAutomationServerTests';
   /// <summary>The wire-protocol version ping must report.</summary>
-  PROTOCOL_VERSION = '0.15';
+  PROTOCOL_VERSION = '0.16';
   /// <summary>Name of the test form, which the requests address.</summary>
   FORM_NAME       = 'AutoTestForm';
 
@@ -1746,6 +1778,240 @@ begin
   Assert.AreEqual( 'OutsideControl', SendFail( 'click_at', Format( '{"form":"%s","name":"pnlClick","x":500,"y":20}', [ FORM_NAME ] ) ) );
   Pump( 200 );
   Assert.AreEqual( 0, FPanelClicks, 'a click outside the panel reached it' );
+
+end;
+
+procedure TTestGllAutomationServer.BuildHitPanel;
+begin
+
+  var oPanel := TPanel.Create( FForm );
+  oPanel.Name := 'pnlHit';
+  oPanel.Parent := FForm;
+  oPanel.Caption := 'Hit panel';
+  oPanel.SetBounds( 10, 155, 180, 140 );
+
+  var oLabel := TLabel.Create( FForm );
+  oLabel.Name := 'lblOff';
+  oLabel.Parent := oPanel;
+  oLabel.AutoSize := False;
+  oLabel.Caption := 'Off label';
+  oLabel.SetBounds( 5, 5, 60, 20 );
+  oLabel.Enabled := False;
+
+  var oButton := TButton.Create( FForm );
+  oButton.Name := 'btnOff';
+  oButton.Parent := oPanel;
+  oButton.Caption := 'Off button';
+  oButton.SetBounds( 70, 5, 80, 25 );
+  oButton.Enabled := False;
+
+  var oNameless := TLabel.Create( FForm );
+  oNameless.Parent := oPanel;
+  oNameless.AutoSize := False;
+  oNameless.Caption := 'Nameless';
+  oNameless.SetBounds( 5, 127, 60, 12 );
+
+  var oPages := TPageControl.Create( FForm );
+  oPages.Name := 'pgHit';
+  oPages.Parent := oPanel;
+  oPages.SetBounds( 5, 40, 170, 85 );
+  for var sPage in [ 'A', 'B' ] do
+  begin
+    var oSheet := TTabSheet.Create( FForm );
+    oSheet.Name := 'ts' + sPage;
+    oSheet.PageControl := oPages;
+    oSheet.Caption := 'Page ' + sPage;
+    var oEdit := TEdit.Create( FForm );
+    oEdit.Name := 'edtOn' + sPage;
+    oEdit.Parent := oSheet;
+    oEdit.Text := 'on page ' + sPage;
+    oEdit.SetBounds( 5, 5, 100, 21 );
+  end;
+  oPages.ActivePageIndex := 0;
+
+  var oCombo := TComboBox.Create( FForm );
+  oCombo.Name := 'cbHit';
+  oCombo.Parent := FForm;
+  oCombo.Style := csDropDown;
+  oCombo.SetBounds( 200, 160, 150, 23 );
+  oCombo.Text := 'combo text';
+
+  var oLong := TEdit.Create( FForm );
+  oLong.Name := 'edtLong';
+  oLong.Parent := FForm;
+  oLong.SetBounds( 200, 200, 150, 21 );
+  oLong.Text := StringOfChar( 'x', 300 );
+
+  Pump( 100 );
+
+end;
+
+procedure TTestGllAutomationServer.ControlAt_HiddenTabPage_IsNeverTheAnswer;
+begin
+
+  BuildHitPanel;
+  var oPanel := FForm.FindComponent( 'pnlHit' ) as TPanel;
+  var pt := ( FForm.FindComponent( 'edtOnA' ) as TControl ).ClientToParent( Point( 3, 3 ), oPanel );
+  var sArgs := Format( '{"form":"%s","name":"pnlHit","x":%d,"y":%d}', [ FORM_NAME, pt.X, pt.Y ] );
+
+  var oReply := Send( 'control_at', sArgs );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Assert.AreEqual( 'edtOnA', oReply.GetValue<string>( 'result.name' ), oReply.ToJSON );
+    Assert.AreEqual( 'on page A', oReply.GetValue<string>( 'result.text' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+  ( FForm.FindComponent( 'pgHit' ) as TPageControl ).ActivePageIndex := 1;
+  Pump( 100 );
+
+  oReply := Send( 'control_at', sArgs );
+  try
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'ok' ), oReply.ToJSON );
+    Assert.AreEqual( 'edtOnB', oReply.GetValue<string>( 'result.name' ), oReply.ToJSON );
+    Assert.AreEqual( 'TEdit', oReply.GetValue<string>( 'result.class' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.ControlAt_FindsDisabledAndUnnamedControls;
+begin
+
+  BuildHitPanel;
+  var oPanel := FForm.FindComponent( 'pnlHit' ) as TPanel;
+
+  // No name: the point is in the form's client coordinates.
+  var pt := ( FForm.FindComponent( 'lblOff' ) as TControl ).ClientToParent( Point( 3, 3 ), FForm );
+  var oReply := Send( 'control_at', Format( '{"form":"%s","x":%d,"y":%d}', [ FORM_NAME, pt.X, pt.Y ] ) );
+  try
+    Assert.AreEqual( 'lblOff', oReply.GetValue<string>( 'result.name' ), oReply.ToJSON );
+    Assert.AreEqual( 'TLabel', oReply.GetValue<string>( 'result.class' ), oReply.ToJSON );
+    Assert.AreEqual( 'Off label', oReply.GetValue<string>( 'result.text' ), oReply.ToJSON );
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'result.vcl' ), oReply.ToJSON );
+    Assert.IsFalse( oReply.GetValue<Boolean>( 'result.clickable' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+  pt := ( FForm.FindComponent( 'btnOff' ) as TControl ).ClientToParent( Point( 4, 4 ), oPanel );
+  oReply := Send( 'control_at', Format( '{"form":"%s","name":"pnlHit","x":%d,"y":%d}', [ FORM_NAME, pt.X, pt.Y ] ) );
+  try
+    Assert.AreEqual( 'btnOff', oReply.GetValue<string>( 'result.name' ), oReply.ToJSON );
+    Assert.AreEqual( 'TButton', oReply.GetValue<string>( 'result.class' ), oReply.ToJSON );
+    Assert.AreEqual( 'Off button', oReply.GetValue<string>( 'result.text' ), oReply.ToJSON );
+    Assert.IsFalse( oReply.GetValue<Boolean>( 'result.clickable' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+  // Bare panel, right of the button and above the page control.
+  oReply := Send( 'control_at', Format( '{"form":"%s","name":"pnlHit","x":170,"y":32}', [ FORM_NAME ] ) );
+  try
+    Assert.AreEqual( 'pnlHit', oReply.GetValue<string>( 'result.name' ), oReply.ToJSON );
+    Assert.AreEqual( 'Hit panel', oReply.GetValue<string>( 'result.text' ), oReply.ToJSON );
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'result.clickable' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+  // The unnamed label: answered under a synthetic name that addresses it.
+  oReply := Send( 'control_at', Format( '{"form":"%s","name":"pnlHit","x":8,"y":130}', [ FORM_NAME ] ) );
+  var sSynthetic: string;
+  try
+    sSynthetic := oReply.GetValue<string>( 'result.name' );
+    Assert.StartsWith( '@TLabel#', sSynthetic, oReply.ToJSON );
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'result.addressable' ), oReply.ToJSON );
+    Assert.AreEqual( 'Nameless', oReply.GetValue<string>( 'result.text' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+  oReply := Send( 'get', Format( '{"form":"%s","name":"%s","prop":"Caption"}', [ FORM_NAME, sSynthetic ] ) );
+  try
+    Assert.AreEqual( 'Nameless', oReply.GetValue<string>( 'result.value' ), 'get on ' + sSynthetic + ': ' + oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.ControlAt_WindowOrigin_CountsTheFrame;
+begin
+
+  BuildHitPanel;
+  var rcWindow: TRect;
+  Winapi.Windows.GetWindowRect( FForm.Handle, rcWindow );
+  var ptClient := ( FForm.FindComponent( 'lblOff' ) as TControl ).ClientToParent( Point( 3, 3 ), FForm );
+  var ptScreen := FForm.ClientToScreen( ptClient );
+  var iX := ptScreen.X - rcWindow.Left;
+  var iY := ptScreen.Y - rcWindow.Top;
+  Assert.AreNotEqual( ptClient.Y, iY, 'the form has no frame, so this test proves nothing' );
+
+  var oReply := Send( 'control_at', Format( '{"form":"%s","x":%d,"y":%d,"origin":"window"}', [ FORM_NAME, iX, iY ] ) );
+  try
+    Assert.AreEqual( 'lblOff', oReply.GetValue<string>( 'result.name' ), oReply.ToJSON );
+    Assert.AreEqual( ptClient.X, oReply.GetValue<Integer>( 'result.x' ), oReply.ToJSON );
+    Assert.AreEqual( ptClient.Y, oReply.GetValue<Integer>( 'result.y' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.ControlAt_BadRequests_AreRefused;
+begin
+
+  BuildHitPanel;
+  Assert.AreEqual( 'OutsideControl', SendFail( 'control_at', Format( '{"form":"%s","name":"pnlHit","x":500,"y":20}', [ FORM_NAME ] ) ) );
+  Assert.AreEqual( 'BadRequest', SendFail( 'control_at', Format( '{"form":"%s","name":"pnlHit","x":5,"y":5,"origin":"screen"}', [ FORM_NAME ] ) ) );
+  Assert.AreEqual( 'BadRequest', SendFail( 'control_at', Format( '{"form":"%s","name":"pnlHit","x":5}', [ FORM_NAME ] ) ) );
+  Assert.AreEqual( 'NotShowing', SendFail( 'control_at', Format( '{"form":"%s","name":"edtOnB","x":5,"y":5}', [ FORM_NAME ] ) ) );
+
+end;
+
+procedure TTestGllAutomationServer.ControlAt_BareForm_IsAddressedByAnEmptyPath;
+begin
+
+  BuildHitPanel;
+  // Below the combo and the long edit, right of pnlHit, above pnlClick and dropZone: nothing but the form.
+  var oReply := Send( 'control_at', Format( '{"form":"%s","x":%d,"y":%d}', [ FORM_NAME, 370, 260 ] ) );
+  try
+    Assert.AreEqual( FORM_NAME, oReply.GetValue<string>( 'result.name' ), oReply.ToJSON );
+    Assert.IsTrue( oReply.FindValue( 'result.path' ) <> nil, 'no path: ' + oReply.ToJSON );
+    Assert.AreEqual( '', oReply.GetValue<string>( 'result.path' ), oReply.ToJSON );
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'result.addressable' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+end;
+
+procedure TTestGllAutomationServer.ControlAt_InnerWindowAndLongText;
+begin
+
+  BuildHitPanel;
+  var oCombo := FForm.FindComponent( 'cbHit' ) as TControl;
+  var pt := oCombo.ClientToParent( Point( 6, 6 ), FForm );
+  var oReply := Send( 'control_at', Format( '{"form":"%s","x":%d,"y":%d}', [ FORM_NAME, pt.X, pt.Y ] ) );
+  try
+    Assert.AreEqual( 'cbHit', oReply.GetValue<string>( 'result.name' ), oReply.ToJSON );
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'result.vcl' ), oReply.ToJSON );
+    Assert.AreEqual( 'Edit', oReply.GetValue<string>( 'result.innerWindow' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
+
+  pt := ( FForm.FindComponent( 'edtLong' ) as TControl ).ClientToParent( Point( 6, 6 ), FForm );
+  oReply := Send( 'control_at', Format( '{"form":"%s","x":%d,"y":%d}', [ FORM_NAME, pt.X, pt.Y ] ) );
+  try
+    Assert.AreEqual( 'edtLong', oReply.GetValue<string>( 'result.name' ), oReply.ToJSON );
+    Assert.AreEqual( StringOfChar( 'x', 256 ), oReply.GetValue<string>( 'result.text' ) );
+    Assert.IsTrue( oReply.GetValue<Boolean>( 'result.textTruncated' ), oReply.ToJSON );
+  finally
+    oReply.Free;
+  end;
 
 end;
 
