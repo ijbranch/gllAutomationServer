@@ -7,6 +7,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > Changes below are live as soon as the project is Release-built and installed - there is no separate release step, so there is no `[Unreleased]` backlog (Ian, 2026-10-19: "As soon as these are Release built they are Released").
 
 ### Changed
+- (2026-11-19) **Windows API imports the Delphi 13 RTL already declares now come from the RTL** - `gllAutomationServer.pas`, `gllAutomationServer.Client.pas`.  `ConvertSidToStringSidW` (both units) uses `Winapi.Windows`'s identical static import; `SetThreadDpiAwarenessContext` uses `Winapi.Windows`'s, delay-loaded like the local one was, so the local `{$WARN SYMBOL_PLATFORM OFF}` around it is gone and the call passes `DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2` instead of `THandle( -4 )`; `PrintWindowApi` is replaced by `Winapi.WinSpool`'s `PrintWindow` (delay-loaded; the unit has no initialisation and none of its names collides with this unit's).  The docs claiming the first two were not in this RTL were wrong.  `ConvertStringSecurityDescriptorToSecurityDescriptorW` and `GetExtendedTcpTable` stay local: the RTL declares neither.
 - (2026-11-03) **Build auto-increment works in every package** — `gllAutomationServer.dproj`, `gllIdeAutomation/gllIdeAutomation.dproj`.  `VerInfo_AutoIncVersion` does nothing
   without the config-and-platform groups Delphi's `IncrementBuildNumber` writes into ( `standards\delphi-build.md` ),
   so the build number never moved.  Each `Cfg_1`/`Cfg_2` x `Win32`/`Win64` group now exists and carries

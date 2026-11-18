@@ -433,8 +433,6 @@ type
 function GetExtendedTcpTable( pTcpTable: Pointer; var pdwSize: DWORD; bOrder: BOOL; ulAf: ULONG; TableClass: Integer;
   Reserved: ULONG ): DWORD; stdcall; external 'iphlpapi.dll';
 
-function ConvertSidToStringSidW( Sid: PSID; var StringSid: PWideChar ): BOOL; stdcall; external advapi32;
-
 /// <summary>Reads a process's token user SID as text.</summary>
 /// <param name="AProcess">An open process handle with query access.</param>
 /// <param name="ASid">The SID, or '' when it could not be read.</param>

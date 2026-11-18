@@ -227,6 +227,8 @@ uses
   System.Types, System.IOUtils, System.DateUtils, System.Math, System.Diagnostics,
   System.TypInfo, System.Variants, System.Generics.Collections,
   Winapi.Windows, Winapi.Messages, Winapi.MultiMon,
+  //  Winapi.WinSpool declares PrintWindow (delay-loaded), which the screenshot renderer uses.
+  Winapi.WinSpool,
   System.SyncObjs,
   Data.DB,
   Vcl.Graphics, Vcl.Imaging.pngimage, Vcl.StdCtrls,
@@ -470,12 +472,6 @@ end;
 /// <returns>True on success.</returns>
 function ConvertStringSecurityDescriptorToSecurityDescriptorW( AStringSD: PWideChar; ARevision: DWORD;
   var ASD: Pointer; ASize: PULONG ): BOOL; stdcall; external 'advapi32.dll';
-
-/// <summary>advapi32 import: renders a SID in its <c>S-1-…</c> string form.</summary>
-/// <param name="ASid">The SID to convert.</param>
-/// <param name="AStringSid">Receives a LocalAlloc'd string the caller must <c>LocalFree</c>.</param>
-/// <returns>True on success.</returns>
-function ConvertSidToStringSidW( ASid: PSID; var AStringSid: PWideChar ): BOOL; stdcall; external 'advapi32.dll';
 
 /// <summary>Returns the SID of the account this process is running as, in <c>S-1-…</c> string form.</summary>
 /// <returns>The SID string, or '' when the token cannot be read.</returns>
@@ -4021,17 +4017,6 @@ end;
 
 { ── M-E: screenshot (Win32 GDI, off the VCL thread) ──────────────────────── }
 
-/// <summary>user32 import: sets the calling thread's DPI-awareness context (for native-resolution capture). Not declared in this RTL's <c>Winapi.Windows</c>.</summary>
-/// <param name="ADpiContext">The DPI-awareness context handle (e.g. <c>-4</c> = PER_MONITOR_AWARE_V2).</param>
-/// <returns>The previous context (pass it back to restore).</returns>
-// `delayed` is flagged W1002 (platform-specific) by the compiler; the delayed
-// load is deliberate — the API is absent on older Windows and is resolved only
-// when first called. This unit is Windows-only by design, so silence the noise
-// locally and restore the directive immediately after the declaration.
-{$WARN SYMBOL_PLATFORM OFF}
-function SetThreadDpiAwarenessContext( ADpiContext: THandle ): THandle; stdcall; external 'user32.dll' delayed;
-{$WARN SYMBOL_PLATFORM DEFAULT}
-
 /// <summary>Saves a bitmap as a PNG, first scaling it down proportionally when it is wider than <paramref name="AMaxWidth"/>.</summary>
 /// <param name="ABmp">The bitmap; left unchanged.</param>
 /// <param name="APath">Destination PNG path (parent directories are created).</param>
@@ -4111,13 +4096,6 @@ begin
   end;
 
 end;
-
-/// <summary>user32 import: asks a window to render itself into a device context. Imported here because this RTL declares it only in <c>Winapi.WinSpool</c>, a printing unit this one has no other use for.</summary>
-/// <param name="AWnd">The window.</param>
-/// <param name="ADC">The device context to render into.</param>
-/// <param name="AFlags"><c>PW_RENDERFULLCONTENT_FLAG</c>, or 0 for the classic rendering.</param>
-/// <returns>True on success.</returns>
-function PrintWindowApi( AWnd: HWND; ADC: HDC; AFlags: UINT ): BOOL; stdcall; external user32 name 'PrintWindow';
 
 const
   /// <summary><c>PrintWindow</c> flag (Windows 8.1+): render through DWM, so themed and DirectX content comes out as it looks.</summary>
@@ -4387,7 +4365,7 @@ begin
       oShot.Canvas.Lock;
       var bRendered: Boolean;
       try
-        bRendered   := PrintWindowApi( rPlan.Root, oRoot.Canvas.Handle, PW_RENDERFULLCONTENT_FLAG );
+        bRendered   := PrintWindow( rPlan.Root, oRoot.Canvas.Handle, PW_RENDERFULLCONTENT_FLAG );
         if bRendered then
           BitBlt( oShot.Canvas.Handle, 0, 0, rPlan.Crop.Width, rPlan.Crop.Height, oRoot.Canvas.Handle, rPlan.Crop.Left,
             rPlan.Crop.Top, SRCCOPY );
@@ -4480,8 +4458,8 @@ begin
   // Make THIS (capture) thread per-monitor DPI-aware so GetMonitorInfo / GetDC /
   // BitBlt work in PHYSICAL pixels and capture the monitor at its native
   // resolution — even though the app's UI thread is DPI-unaware (on a 4K @150%
-  // display an unaware capture is virtualised down to 2560x1440). -4 = V2.
-  var hPrevDpi      := SetThreadDpiAwarenessContext( THandle( -4 ) );
+  // display an unaware capture is virtualised down to 2560x1440).
+  var hPrevDpi      := SetThreadDpiAwarenessContext( DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2 );
   try
     var sArea       := LowerCase( AReq.GetValue<string>( 'area', '' ) );
     var hWin        := FindAppWindow;
@@ -4537,7 +4515,7 @@ begin
       TJSONObject( Result ).AddPair( 'sourceHeight', TJSONNumber.Create( rc.Bottom - rc.Top ) );
     end;
   finally
-    if hPrevDpi <> 0 then SetThreadDpiAwarenessContext( hPrevDpi );
+    if hPrevDpi <> nil then SetThreadDpiAwarenessContext( hPrevDpi );
   end;
 
 end;
