@@ -32,13 +32,14 @@ program gllAutomationServerTests;
 {$STRONGLINKTYPES ON}
 
 uses
+  // FastMM5 FIRST, as the memory manager the per-test leak check measures ( GllDUnitX.SuiteRunner )
+  FastMM5,
   System.SysUtils,
   Vcl.Forms,
   Vcl.Themes,
   Vcl.Styles,
-  DUnitX.Loggers.Console,
-  DUnitX.Loggers.Xml.NUnit,
   DUnitX.TestFramework,
+  GllDUnitX.SuiteRunner,
   TestGllAutomationServer in 'TestGllAutomationServer.pas',
   gllIdeAutomation.Rules in '..\gllIdeAutomation\src\gllIdeAutomation.Rules.pas',
   TestGllIdeAutomationRules in 'TestGllIdeAutomationRules.pas',
@@ -47,11 +48,6 @@ uses
 // The project resource carries the embedded VCL style; without it the runner stops with exit code 251.
 {$R *.res}
 
-var
-  Runner: ITestRunner;
-  Results: IRunResults;
-  Logger: ITestLogger;
-  NUnitLogger: ITestLogger;
 begin
   // Started by the client tests as their target app: run as that, not as the suite.
   if RunClientTargetIfAsked then
@@ -69,28 +65,14 @@ begin
       Halt( 251 );
     end;
     TStyleManager.UseParentPaintBuffers := True;
-    // Check command line options, will exit if invalid
-    TDUnitX.CheckCommandLine;
-    // Create the test runner
-    Runner := TDUnitX.CreateRunner;
-    // Tell the runner to use RTTI to find Fixtures
-    Runner.UseRTTI := True;
     // String assertions compare case-sensitively; a test that wants case-insensitivity says so explicitly.
     Assert.IgnoreCaseDefault := False;
-    // When true, Assertions must be made during tests
-    Runner.FailsOnNoAsserts := True;
 
-    // Console logger with verbose output
-    Logger := TDUnitXConsoleLogger.Create( True );
-    Runner.AddLogger( Logger );
-    // Generate an NUnit-compatible XML report
-    NUnitLogger := TDUnitXXMLNUnitFileLogger.Create( TDUnitX.Options.XMLOutputFile );
-    Runner.AddLogger( NUnitLogger );
-
-    // Run tests
-    Results := Runner.Execute;
-    if ( not Results.AllPassed ) then
-      System.ExitCode := 1;
+    // Every test is checked for memory leaks by GllDUnitX.SuiteRunner: DUnitX's command line ( an unknown option
+    // exits 251 ), a warm-up pass, the measured pass under FastMM5 with the console and NUnit XML loggers, then a
+    // re-run of each flagged test; only a leak that repeats counts.  Exit code: 0 all passed; n = failures + errors
+    // ( warm-up failures and confirmed leaks included ), clamped to 249; 250 no tests found; 251 the runner raised.
+    RunGllSuite( TGllSuiteOptions.Defaults );
 
     {$IFNDEF CI}
     // Pause so the console window stays open when run interactively.
@@ -103,9 +85,9 @@ begin
   except
     on E: Exception do
     begin
-      System.Writeln( E.ClassName, ': ', E.Message );
+      System.Writeln( 'Runner error  : ', E.ClassName, ': ', E.Message );
       // A runner failure is a failed run, not a green one.
-      System.ExitCode := 1;
+      System.ExitCode := 251;
     end;
   end;
 end.

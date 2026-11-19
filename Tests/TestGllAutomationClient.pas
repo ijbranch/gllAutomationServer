@@ -349,6 +349,9 @@ begin
   FreeAndNil( FApp );
   if TDirectory.Exists( FScratch ) then
     TDirectory.Delete( FScratch, True );
+  // Strings set in Setup are released here, not by the next Setup, so the leak check sees each test balanced
+  FScratch          := '';
+  FName             := '';
 
 end;
 
